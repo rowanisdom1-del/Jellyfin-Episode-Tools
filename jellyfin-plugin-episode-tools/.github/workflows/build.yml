@@ -22,16 +22,31 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Build
-        run: dotnet build Jellyfin.Plugin.EpisodeTools/Jellyfin.Plugin.EpisodeTools.csproj -c Release -o out
-
-      - name: Package (DLL + meta.json in a zip)
+      - name: Build and Package Plugin
         run: |
           set -euo pipefail
-          VERSION=$(grep -oP '(?<=<Version>)[^<]+' Jellyfin.Plugin.EpisodeTools/Jellyfin.Plugin.EpisodeTools.csproj)
+          
+          # 1. Dynamically locate the C# project file anywhere in the repository
+          PROJECT=$(find . -maxdepth 4 -type f -name "*.csproj" | head -n1)
+          if [ -z "$PROJECT" ]; then
+            echo "Error: No .csproj file could be found in the repository."
+            exit 1
+          fi
+          echo "Found project: $PROJECT"
+          
+          # 2. Compile the binary asset
+          dotnet build "$PROJECT" -c Release -o out
+          
+          # 3. Extract version metadata and package assembly context dynamically
+          VERSION=$(grep -oP '(?<=<Version>)[^<]+' "$PROJECT" || echo "1.0.0.0")
+          ASSEMBLY=$(basename "$PROJECT" .csproj)
           PKG="EpisodeTools_${VERSION}"
+          
+          echo "Packaging: $PKG (Assembly: $ASSEMBLY)"
           mkdir -p "$PKG"
-          cp out/Jellyfin.Plugin.EpisodeTools.dll "$PKG/"
+          cp "out/${ASSEMBLY}.dll" "$PKG/"
+          
+          # 4. Generate deployment manifest JSON mapping structure
           cat > "$PKG/meta.json" <<EOF
           {
             "category": "General",
@@ -48,7 +63,11 @@ jobs:
             "autoUpdate": false
           }
           EOF
-          python3 -c "import json; json.load(open('$PKG/meta.json'))"
+          
+          # 5. Sanity check deployment metadata structural parsing integrity
+          python3 -c "import json,sys; json.load(open('$PKG/meta.json')) or sys.exit(0)"
+          
+          # 6. Compress staging output workspace into clean install target
           (cd "$PKG" && zip -r "../${PKG}.zip" .)
           echo "PKG=${PKG}" >> "$GITHUB_ENV"
           ls -la "$PKG" "${PKG}.zip"
