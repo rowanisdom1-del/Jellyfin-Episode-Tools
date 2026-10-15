@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.EpisodeTools</RootNamespace>
+    <AssemblyName>Jellyfin.Plugin.EpisodeTools</AssemblyName>
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Only our own DLL goes into the plugin folder; Jellyfin supplies everything else. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <!-- 12.0.0 is the lowest Jellyfin 12 release. Compiling against it keeps the plugin loadable on 12.0, 12.1, 12.2 and later 12.x. -->
+    <PackageReference Include="Jellyfin.Controller" Version="12.0.0" ExcludeAssets="runtime" />
+    <PackageReference Include="Jellyfin.Model" Version="12.0.0" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Configuration\configPage.html" />
+    <!-- The two scripts live inside the DLL, so installing the plugin is just one file. -->
+    <EmbeddedResource Include="Scripts\rename_episodes.py" LogicalName="rename_episodes.py" />
+    <EmbeddedResource Include="Scripts\convert_mkv_to_mp4.sh" LogicalName="convert_mkv_to_mp4.sh" />
+  </ItemGroup>
+
+</Project>
