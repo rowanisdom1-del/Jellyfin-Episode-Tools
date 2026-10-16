@@ -59,3 +59,8 @@ Requirements on the server: `python3`, `bash` and `ffmpeg` (`sudo apt install py
   is `/var/lib/jellyfin/plugins/configurations/Jellyfin.Plugin.EpisodeTools.xml`.
 - Converted `.mp4` files are owned by the `jellyfin` user and readable by everyone.
 - Stop button: stopping a convert task removes its half-finished `.part` file.
+- Audio: files with DTS, TrueHD or FLAC audio cannot go into an MP4 as they are. With the setting
+  "Convert DTS, TrueHD and FLAC audio to AAC" (on by default) only those audio tracks are re-encoded to AAC
+  (5.1 at 448k, stereo at 192k) and the video is still copied untouched. Turn it off to skip such files instead.
+  If you also delete the .mkv, the original lossless audio is gone for good.
+- Updating the plugin: unzip the new zip over the existing plugin folder, then restart Jellyfin.
