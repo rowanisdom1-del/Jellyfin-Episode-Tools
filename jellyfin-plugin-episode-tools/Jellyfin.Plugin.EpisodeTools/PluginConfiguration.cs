@@ -15,6 +15,7 @@ public class PluginConfiguration : BasePluginConfiguration
         RenameDirectory = "/mnt/storage/media/Series";
         ConvertDirectory = "/mnt/storage/media";
         DeleteOriginalsAfterConvert = false;
+        ConvertUnusualAudioToAac = true;
     }
 
     /// <summary>
@@ -31,4 +32,10 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets a value indicating whether each .mkv is deleted once its .mp4 has been checked.
     /// </summary>
     public bool DeleteOriginalsAfterConvert { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether audio that MP4 handles badly (DTS, TrueHD, FLAC...) is
+    /// re-encoded to AAC instead of the file being skipped. The video is always copied untouched.
+    /// </summary>
+    public bool ConvertUnusualAudioToAac { get; set; }
 }
