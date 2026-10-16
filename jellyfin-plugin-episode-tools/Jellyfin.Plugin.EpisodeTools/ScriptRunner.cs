@@ -58,6 +58,15 @@ internal static class ScriptRunner
             }
         }
 
+        if (cfg.ConvertUnusualAudioToAac)
+        {
+            args.Add("--audio-to-aac");
+            if (apply && cfg.DeleteOriginalsAfterConvert)
+            {
+                logger.LogWarning("[Episode Tools] Audio such as DTS/TrueHD/FLAC becomes AAC. Together with deleting the .mkv, the original audio is gone for good.");
+            }
+        }
+
         var dir = (cfg.ConvertDirectory ?? string.Empty).Trim();
         if (dir.Length > 0)
         {
