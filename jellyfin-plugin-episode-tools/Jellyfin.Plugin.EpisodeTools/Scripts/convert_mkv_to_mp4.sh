@@ -9,6 +9,7 @@
 #   ./convert_mkv_to_mp4.sh --apply               # convert, keep originals
 #   ./convert_mkv_to_mp4.sh --apply --delete-originals
 #   ./convert_mkv_to_mp4.sh --apply --force        # allow unusual codecs
+#   ./convert_mkv_to_mp4.sh --apply --audio-to-aac # DTS/TrueHD/FLAC audio -> AAC, video copied
 #
 # Needs ffmpeg and ffprobe: sudo apt install ffmpeg
 
@@ -18,6 +19,7 @@ SERIES_DIR="/mnt/storage/media/"
 APPLY=false
 DELETE=false
 FORCE=false
+AUDIO_TO_AAC=false
 DIR_SET=false
 
 usage() {
@@ -29,6 +31,9 @@ Options:
   --delete-originals   Delete each MKV after its MP4 has been verified.
                        Requires --apply.
   --force              Also attempt codecs outside the common MP4 codec lists.
+  --audio-to-aac       Instead of skipping files whose audio MP4 does not handle well
+                       (DTS, TrueHD, FLAC...), re-encode only those audio tracks to AAC.
+                       The video is still copied untouched. AAC tracks are copied as they are.
   -h, --help           Show this help.
 
 Existing MP4s are never overwritten. Text subtitles are converted to mov_text;
@@ -41,6 +46,7 @@ for arg in "$@"; do
     --apply) APPLY=true ;;
     --delete-originals) DELETE=true ;;
     --force) FORCE=true ;;
+    --audio-to-aac) AUDIO_TO_AAC=true ;;
     -h|--help) usage; exit 0 ;;
     --*)
       echo "Unknown option: $arg (see --help)" >&2
@@ -106,19 +112,20 @@ trap 'echo; echo "Interrupted; cleaning up the unfinished file."; exit 130' INT 
 #
 # SUBCOUNT counts only text subtitle streams mapped into the MP4.
 probe() {
-  local input=$1 out line idx codec type
+  local input=$1 out line idx codec type channels
   VCOUNT=0
   ACOUNT=0
   SUBCOUNT=0
   PIC_SUBS=0
   VCODECS=()
   ACODECS=()
+  ACHANNELS=()
   VIDEO_MAPS=()
   AUDIO_MAPS=()
   SUB_MAPS=()
 
   out=$(ffprobe -v error \
-    -show_entries stream=index,codec_name,codec_type \
+    -show_entries stream=index,codec_name,codec_type,channels \
     -of compact=p=0:nk=0 -i "$input" 2>/dev/null) || return 1
   [[ -n "$out" ]] || return 1
 
@@ -126,10 +133,12 @@ probe() {
     idx=""
     codec=""
     type=""
+    channels=""
 
     [[ $line =~ index=([0-9]+) ]] && idx=${BASH_REMATCH[1]}
     [[ $line =~ codec_name=([^|]+) ]] && codec=${BASH_REMATCH[1]}
     [[ $line =~ codec_type=([a-z]+) ]] && type=${BASH_REMATCH[1]}
+    [[ $line =~ channels=([0-9]+) ]] && channels=${BASH_REMATCH[1]}
 
     [[ -n "$idx" && -n "$codec" ]] || continue
 
@@ -148,6 +157,7 @@ probe() {
       audio)
         ACOUNT=$((ACOUNT + 1))
         ACODECS+=("$codec")
+        ACHANNELS+=("${channels:-2}")
         AUDIO_MAPS+=(-map "0:$idx")
         ;;
       subtitle)
@@ -187,7 +197,7 @@ verify() {
   local expected_v=$1 expected_a=$2 expected_s=$3 src=$4 new=$5
   local d1 d2 new_size
   local VCOUNT ACOUNT SUBCOUNT PIC_SUBS
-  local -a VCODECS ACODECS VIDEO_MAPS AUDIO_MAPS SUB_MAPS
+  local -a VCODECS ACODECS ACHANNELS VIDEO_MAPS AUDIO_MAPS SUB_MAPS
 
   if [[ ! -s "$new" ]]; then
     REASON="new file is empty"
@@ -296,11 +306,30 @@ while IFS= read -r -d '' src; do
       unsafe+=" video:$codec"
     fi
   done
-  for codec in "${ACODECS[@]}"; do
+  # Audio that MP4 handles badly (DTS, TrueHD, FLAC...). With --audio-to-aac these tracks are
+  # re-encoded to AAC (output audio stream number i is input audio stream number i).
+  unsafe_audio=""
+  audio_args=()
+  for i in "${!ACODECS[@]}"; do
+    codec=${ACODECS[$i]}
     if ! is_safe_codec audio "$codec"; then
-      unsafe+=" audio:$codec"
+      unsafe_audio+=" audio:$codec"
+      if $AUDIO_TO_AAC; then
+        channels=${ACHANNELS[$i]:-2}
+        if (( channels <= 2 )); then
+          bitrate=192k
+        elif (( channels <= 6 )); then
+          bitrate=448k
+        else
+          bitrate=640k
+        fi
+        audio_args+=("-c:a:$i" aac "-b:a:$i" "$bitrate")
+      fi
     fi
   done
+  if ! $AUDIO_TO_AAC; then
+    unsafe+="$unsafe_audio"
+  fi
 
   if [[ -n "$unsafe" ]] && ! $FORCE; then
     echo "  Skipping: unusual MP4 codec(s):${unsafe}"
@@ -316,6 +345,7 @@ while IFS= read -r -d '' src; do
   if ! $APPLY; then
     echo "  Would convert: $VCOUNT video, $ACOUNT audio, $SUBCOUNT text subtitle stream(s)"
     [[ -n "$unsafe" ]] && echo "  Warning: --force would be required for:${unsafe}"
+    [[ -n "$unsafe_audio" ]] && $AUDIO_TO_AAC && echo "  Audio would be re-encoded to AAC:${unsafe_audio}"
     continue
   fi
 
@@ -334,12 +364,16 @@ while IFS= read -r -d '' src; do
   maps=("${VIDEO_MAPS[@]}" "${AUDIO_MAPS[@]}" "${SUB_MAPS[@]}")
   CURRENT_TMP=$tmp
 
+  if [[ -n "$unsafe_audio" ]] && $AUDIO_TO_AAC; then
+    echo "  Re-encoding audio to AAC:${unsafe_audio}"
+  fi
   echo "  Converting..."
   if ! "${PRIO[@]}" ffmpeg -nostdin -hide_banner -loglevel warning \
       -i "$src" \
       "${maps[@]}" \
       -map_metadata 0 -map_chapters 0 \
       -c copy -c:s mov_text \
+      "${audio_args[@]}" \
       -movflags +faststart -f mp4 "$tmp"; then
     echo "  Failed: ffmpeg could not create the MP4."
     rm -f -- "$tmp"
