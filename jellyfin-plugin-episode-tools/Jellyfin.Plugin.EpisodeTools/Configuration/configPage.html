@@ -28,6 +28,13 @@
                     </label>
                     <div class="fieldDescription checkboxFieldDescription">Off by default. When off, both the .mkv and the .mp4 stay (Jellyfin may then show duplicates until you remove the .mkv files).</div>
                 </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="ConvertUnusualAudioToAac" name="ConvertUnusualAudioToAac" type="checkbox" is="emby-checkbox" />
+                        <span>Convert DTS, TrueHD and FLAC audio to AAC while converting</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">On: files with such audio are no longer skipped. Only those audio tracks are re-encoded to AAC (5.1 at 448k, stereo at 192k); the video is copied untouched and AAC tracks stay as they are. Off: those files are skipped. If you also delete the .mkv, the original lossless audio is gone for good.</div>
+                </div>
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>
@@ -48,6 +55,7 @@
                     document.querySelector('#RenameDirectory').value = config.RenameDirectory || '';
                     document.querySelector('#ConvertDirectory').value = config.ConvertDirectory || '';
                     document.querySelector('#DeleteOriginalsAfterConvert').checked = !!config.DeleteOriginalsAfterConvert;
+                    document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -59,6 +67,7 @@
                     config.RenameDirectory = document.querySelector('#RenameDirectory').value.trim();
                     config.ConvertDirectory = document.querySelector('#ConvertDirectory').value.trim();
                     config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
+                    config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });
