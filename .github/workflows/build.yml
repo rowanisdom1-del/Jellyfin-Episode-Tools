@@ -22,24 +22,33 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Find the project (works wherever the folders were uploaded)
+        run: |
+          set -euo pipefail
+          CSPROJ=$(find . -name Jellyfin.Plugin.EpisodeTools.csproj | awk '{print length, $0}' | sort -n | head -1 | cut -d' ' -f2-)
+          LOGO=$(find . -path '*assets/logo.png' | awk '{print length, $0}' | sort -n | head -1 | cut -d' ' -f2- || true)
+          echo "Project: $CSPROJ"
+          echo "Logo: ${LOGO:-none}"
+          echo "CSPROJ=$CSPROJ" >> "$GITHUB_ENV"
+          echo "LOGO=${LOGO:-}" >> "$GITHUB_ENV"
+
       - name: Build
-        run: dotnet build Jellyfin.Plugin.EpisodeTools/Jellyfin.Plugin.EpisodeTools.csproj -c Release -o out
+        run: dotnet build "$CSPROJ" -c Release -o out
 
       - name: Package (DLL + meta.json in a zip)
         run: |
           set -euo pipefail
-          VERSION=$(grep -oP '(?<=<Version>)[^<]+' Jellyfin.Plugin.EpisodeTools/Jellyfin.Plugin.EpisodeTools.csproj)
+          VERSION=$(grep -oP '(?<=<Version>)[^<]+' "$CSPROJ")
           PKG="EpisodeTools_${VERSION}"
           mkdir -p "$PKG"
           cp out/Jellyfin.Plugin.EpisodeTools.dll "$PKG/"
-          cp assets/logo.png "$PKG/logo.png"
+          if [ -n "$LOGO" ]; then cp "$LOGO" "$PKG/logo.png"; fi
           cat > "$PKG/meta.json" <<EOF
           {
             "category": "General",
             "changelog": "Version ${VERSION}",
             "description": "Scheduled tasks to rename episodes to Show - S01E02 - Title and to convert MKV to MP4 without quality loss.",
             "guid": "059e3874-fa20-4af9-af24-8d26823840d9",
-            "imagePath": "logo.png",
             "name": "Episode Tools",
             "overview": "Rename episodes and convert MKV to MP4 from Scheduled Tasks",
             "owner": "${GITHUB_REPOSITORY_OWNER}",
@@ -50,6 +59,9 @@ jobs:
             "autoUpdate": false
           }
           EOF
+          if [ -f "$PKG/logo.png" ]; then
+            python3 -c "import json; p='$PKG/meta.json'; d=json.load(open(p)); d['imagePath']='logo.png'; json.dump(d, open(p,'w'), indent=2)"
+          fi
           python3 -c "import json; json.load(open('$PKG/meta.json'))"
           (cd "$PKG" && zip -r "../${PKG}.zip" .)
           echo "PKG=${PKG}" >> "$GITHUB_ENV"
