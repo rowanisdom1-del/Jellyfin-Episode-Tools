@@ -81,6 +81,36 @@ public class PluginConfiguration : BasePluginConfiguration
     // cause deserialization to fail for strict bool properties.
     private string _deleteOriginalsAfterConvert;
     private string _convertUnusualAudioToAac;
+    private string _faststartOptimize = "true";
+
+    /// <summary>
+    /// Raw serialized value for FaststartOptimize. Kept as string for tolerant deserialization.
+    /// The XML element name is preserved.
+    /// </summary>
+    [XmlElement("FaststartOptimize")]
+    public string FaststartOptimizeRaw
+    {
+        get => _faststartOptimize;
+        set => _faststartOptimize = value ?? "true";
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the converted MP4 is optimized for progressive
+    /// web playback (faststart). This writes the output file twice. Turning it off makes the
+    /// conversion faster and halves the writes, which helps on slow drives. Jellyfin streams
+    /// with range requests, so it works fine without faststart.
+    /// This boolean accessor is XmlIgnored and parses many common textual representations.
+    /// </summary>
+    [XmlIgnore]
+    public bool FaststartOptimize
+    {
+        get
+        {
+            var s = (_faststartOptimize ?? "true").Trim().ToLowerInvariant();
+            return !(s == "false" || s == "0" || s == "no" || s == "n" || s == "off");
+        }
+        set => _faststartOptimize = value ? "true" : "false";
+    }
 
     /// <summary>
     /// Raw serialized value for DeleteOriginalsAfterConvert. Kept as string for tolerant

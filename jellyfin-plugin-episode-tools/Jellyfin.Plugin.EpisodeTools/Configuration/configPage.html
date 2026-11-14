@@ -52,6 +52,13 @@
                     </label>
                     <div class="fieldDescription checkboxFieldDescription">On: files with such audio are no longer skipped. Only those audio tracks are re-encoded to AAC (5.1 at 448k, stereo at 192k); the video is copied untouched and AAC tracks stay as they are. Off: those files are skipped. If you also delete the .mkv, the original lossless audio is gone for good.</div>
                 </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="FaststartOptimize" name="FaststartOptimize" type="checkbox" is="emby-checkbox" />
+                        <span>Optimize MP4s for web playback (faststart) — slower conversion</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
+                </div>
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>
@@ -76,6 +83,7 @@
                     }
                     document.querySelector('#DeleteOriginalsAfterConvert').checked = !!config.DeleteOriginalsAfterConvert;
                     document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
+                    document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -95,6 +103,7 @@
                     config.ConvertFolders = folders;
                     config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
                     config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
+                    config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });

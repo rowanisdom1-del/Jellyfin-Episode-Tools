@@ -22,6 +22,7 @@ APPLY=false
 DELETE=false
 FORCE=false
 AUDIO_TO_AAC=false
+FASTSTART=true
 REPORT_FILE=""
 FOLDERS=()
 
@@ -43,6 +44,9 @@ Options:
                        The video is still copied untouched. AAC tracks are copied as they are.
   --report FILE        Write a report of every file that cannot be converted and why,
                        as tab separated lines: CANNOT <tab> path <tab> reason.
+  --no-faststart       Skip the faststart optimization (moving the MP4 index to the
+                       front of the file). Faster conversion, half the writes.
+                       Jellyfin streams with range requests and works fine without it.
   -h, --help           Show this help.
 
 Existing MP4s are never overwritten. Text subtitles are converted to mov_text;
@@ -56,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --delete-originals) DELETE=true ;;
     --force) FORCE=true ;;
     --audio-to-aac) AUDIO_TO_AAC=true ;;
+    --no-faststart) FASTSTART=false ;;
     --report)
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "--report needs a file path (see --help)." >&2
@@ -413,6 +418,11 @@ while IFS= read -r -d '' src; do
   maps=("${VIDEO_MAPS[@]}" "${AUDIO_MAPS[@]}" "${SUB_MAPS[@]}")
   CURRENT_TMP=$tmp
 
+  movflags=()
+  if $FASTSTART; then
+    movflags=(-movflags +faststart)
+  fi
+
   if [[ -n "$unsafe_audio" ]] && $AUDIO_TO_AAC; then
     echo "  Re-encoding audio to AAC:${unsafe_audio}"
   fi
@@ -423,7 +433,7 @@ while IFS= read -r -d '' src; do
       -map_metadata 0 -map_chapters 0 \
       -c copy -c:s mov_text \
       "${audio_args[@]}" \
-      -movflags +faststart -f mp4 "$tmp"; then
+      "${movflags[@]}" -f mp4 "$tmp"; then
     echo "  Failed: ffmpeg could not create the MP4."
     report "$src" "ffmpeg failed to create the MP4 (see Dashboard > Logs for the ffmpeg error)"
     rm -f -- "$tmp"

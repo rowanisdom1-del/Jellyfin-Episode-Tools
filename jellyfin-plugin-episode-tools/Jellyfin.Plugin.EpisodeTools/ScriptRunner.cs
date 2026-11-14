@@ -68,6 +68,15 @@ internal static class ScriptRunner
             }
         }
 
+        if (!cfg.FaststartOptimize)
+        {
+            args.Add("--no-faststart");
+            if (apply)
+            {
+                logger.LogInformation("[Episode Tools] Settings say: skip the faststart optimization (faster, fewer writes). Jellyfin streams fine without it.");
+            }
+        }
+
         // A fresh report for every run; the report page in the dashboard reads it.
         var reportPath = Path.Combine(
             Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools"),
