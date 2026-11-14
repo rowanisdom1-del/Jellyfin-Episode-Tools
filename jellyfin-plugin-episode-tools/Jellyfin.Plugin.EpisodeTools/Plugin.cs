@@ -58,5 +58,14 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 "{0}.Configuration.configPage.html",
                 GetType().Namespace)
         };
+        yield return new PluginPageInfo
+        {
+            Name = "Episode Tools Report",
+            DisplayName = "Episode Tools Report",
+            EmbeddedResourcePath = string.Format(
+                CultureInfo.InvariantCulture,
+                "{0}.Configuration.reportPage.html",
+                GetType().Namespace)
+        };
     }
 }

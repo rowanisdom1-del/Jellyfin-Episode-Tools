@@ -42,7 +42,8 @@ internal static class ScriptRunner
     }
 
     /// <summary>
-    /// Runs the MKV to MP4 script. Without <paramref name="apply"/> it only lists what would be converted.
+    /// Runs the MKV to MP4 script over every configured scan folder. Without <paramref name="apply"/>
+    /// it only lists what would be converted.
     /// </summary>
     public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken)
     {
@@ -67,13 +68,33 @@ internal static class ScriptRunner
             }
         }
 
-        var dir = (cfg.ConvertDirectory ?? string.Empty).Trim();
-        if (dir.Length > 0)
+        // A fresh report for every run; the report page in the dashboard reads it.
+        var reportPath = Path.Combine(
+            Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools"),
+            "convert-report.txt");
+        try
         {
-            args.Add(dir);
+            if (File.Exists(reportPath))
+            {
+                File.Delete(reportPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] Could not reset the convert report file.");
         }
 
-        return RunAsync(logger, "bash", "convert_mkv_to_mp4.sh", args, CountMkvFiles(dir), progress, cancellationToken);
+        args.Add("--report");
+        args.Add(reportPath);
+
+        var total = 0;
+        foreach (var dir in cfg.EffectiveConvertFolders)
+        {
+            args.Add(dir);
+            total += CountMkvFiles(dir);
+        }
+
+        return RunAsync(logger, "bash", "convert_mkv_to_mp4.sh", args, total, progress, cancellationToken);
     }
 
     private static PluginConfiguration GetConfig()

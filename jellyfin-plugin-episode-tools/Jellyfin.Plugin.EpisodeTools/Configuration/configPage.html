@@ -17,9 +17,26 @@
                     <div class="fieldDescription">Must be the folder that directly contains one sub folder per series, for example /mnt/storage/media/Series. Do not point this at the whole media folder: the first folder name would be used as the show name.</div>
                 </div>
                 <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="ConvertDirectory">Folder to search for .mkv files (for converting)</label>
-                    <input id="ConvertDirectory" name="ConvertDirectory" type="text" is="emby-input" />
-                    <div class="fieldDescription">All sub folders are searched too, so /mnt/storage/media covers the whole media folder (series and movies).</div>
+                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder1">Scan folder 1 (for converting .mkv to .mp4)</label>
+                    <input id="ScanFolder1" name="ScanFolder1" type="text" is="emby-input" />
+                    <div class="fieldDescription">All sub folders are searched too. You can set up to five folders (below). Leave the rest empty. Examples: /mnt/storage/media or /media/sussyaname.</div>
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder2">Scan folder 2 (optional)</label>
+                    <input id="ScanFolder2" name="ScanFolder2" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder3">Scan folder 3 (optional)</label>
+                    <input id="ScanFolder3" name="ScanFolder3" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder4">Scan folder 4 (optional)</label>
+                    <input id="ScanFolder4" name="ScanFolder4" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder5">Scan folder 5 (optional)</label>
+                    <input id="ScanFolder5" name="ScanFolder5" type="text" is="emby-input" />
+                    <div class="fieldDescription">After converting, open Dashboard > Plugins > Episode Tools > Episode Tools Report to see every .mkv that could not be converted and why.</div>
                 </div>
                 <div class="checkboxContainer checkboxContainer-withDescription">
                     <label class="emby-checkbox-label">
@@ -53,7 +70,10 @@
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(EpisodeToolsConfig.pluginUniqueId).then(function (config) {
                     document.querySelector('#RenameDirectory').value = config.RenameDirectory || '';
-                    document.querySelector('#ConvertDirectory').value = config.ConvertDirectory || '';
+                    var folders = config.ConvertFolders || [];
+                    for (var i = 1; i <= 5; i++) {
+                        document.querySelector('#ScanFolder' + i).value = folders[i - 1] || '';
+                    }
                     document.querySelector('#DeleteOriginalsAfterConvert').checked = !!config.DeleteOriginalsAfterConvert;
                     document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
                     Dashboard.hideLoadingMsg();
@@ -65,7 +85,14 @@
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(EpisodeToolsConfig.pluginUniqueId).then(function (config) {
                     config.RenameDirectory = document.querySelector('#RenameDirectory').value.trim();
-                    config.ConvertDirectory = document.querySelector('#ConvertDirectory').value.trim();
+                    var folders = [];
+                    for (var i = 1; i <= 5; i++) {
+                        var value = document.querySelector('#ScanFolder' + i).value.trim();
+                        if (value) {
+                            folders.push(value);
+                        }
+                    }
+                    config.ConvertFolders = folders;
                     config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
                     config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {

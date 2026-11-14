@@ -4,14 +4,16 @@
 # Remuxes MKV files to MP4 without re-encoding video or audio.
 #
 # Usage:
-#   ./convert_mkv_to_mp4.sh [folder] [options]
+#   ./convert_mkv_to_mp4.sh [folder ...] [options]
 #   ./convert_mkv_to_mp4.sh                       # dry run
 #   ./convert_mkv_to_mp4.sh --apply               # convert, keep originals
 #   ./convert_mkv_to_mp4.sh --apply --delete-originals
 #   ./convert_mkv_to_mp4.sh --apply --force        # allow unusual codecs
 #   ./convert_mkv_to_mp4.sh --apply --audio-to-aac # DTS/TrueHD/FLAC audio -> AAC, video copied
+#   ./convert_mkv_to_mp4.sh --report /path/file.txt /media/a /media/b
 #
-# Needs ffmpeg and ffprobe: sudo apt install ffmpeg
+# Any number of folders may be given; each is searched (including sub folders)
+# for .mkv files.
 
 set -uo pipefail
 
@@ -20,11 +22,16 @@ APPLY=false
 DELETE=false
 FORCE=false
 AUDIO_TO_AAC=false
-DIR_SET=false
+REPORT_FILE=""
+FOLDERS=()
 
 usage() {
   cat <<'EOF'
-Usage: convert_mkv_to_mp4.sh [folder] [options]
+Usage: convert_mkv_to_mp4.sh [folder ...] [options]
+
+Folders:
+  Any number of folders. Each one is searched (including sub folders) for .mkv
+  files. With no folder, /mnt/storage/media/ is used.
 
 Options:
   --apply              Convert files. Without this, the script only previews.
@@ -34,6 +41,8 @@ Options:
   --audio-to-aac       Instead of skipping files whose audio MP4 does not handle well
                        (DTS, TrueHD, FLAC...), re-encode only those audio tracks to AAC.
                        The video is still copied untouched. AAC tracks are copied as they are.
+  --report FILE        Write a report of every file that cannot be converted and why,
+                       as tab separated lines: CANNOT <tab> path <tab> reason.
   -h, --help           Show this help.
 
 Existing MP4s are never overwritten. Text subtitles are converted to mov_text;
@@ -41,44 +50,64 @@ unsupported subtitle streams are omitted.
 EOF
 }
 
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --apply) APPLY=true ;;
     --delete-originals) DELETE=true ;;
     --force) FORCE=true ;;
     --audio-to-aac) AUDIO_TO_AAC=true ;;
+    --report)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--report needs a file path (see --help)." >&2
+        exit 1
+      fi
+      REPORT_FILE=$2
+      shift
+      ;;
     -h|--help) usage; exit 0 ;;
     --*)
-      echo "Unknown option: $arg (see --help)" >&2
+      echo "Unknown option: $1 (see --help)" >&2
       exit 1
       ;;
     *)
-      if $DIR_SET; then
-        echo "Only one folder may be specified (see --help)." >&2
-        exit 1
-      fi
-      SERIES_DIR=$arg
-      DIR_SET=true
+      FOLDERS+=("$1")
       ;;
   esac
+  shift
 done
 
-SERIES_DIR="${SERIES_DIR%/}"
-[[ -n "$SERIES_DIR" ]] || SERIES_DIR="/"
+if (( ${#FOLDERS[@]} == 0 )); then
+  FOLDERS=("$SERIES_DIR")
+fi
 
 if $DELETE && ! $APPLY; then
   echo "--delete-originals requires --apply." >&2
   exit 1
 fi
 
+for folder in "${FOLDERS[@]}"; do
+  if [[ ! -d "$folder" ]]; then
+    echo "Folder not found: $folder (the other folders are still scanned)" >&2
+  fi
+done
+
+# The report page in the dashboard reads this file. Header line first, then one
+# CANNOT line per file that cannot be converted.
+if [[ -n "$REPORT_FILE" ]]; then
+  mode=preview
+  $APPLY && mode=apply
+  printf 'RUN\t%s\t%s\n' "$mode" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$REPORT_FILE" 2>/dev/null || REPORT_FILE=""
+fi
+
+# report <path> <reason>: remember a file that cannot be converted.
+report() {
+  [[ -n "$REPORT_FILE" ]] || return 0
+  printf 'CANNOT\t%s\t%s\n' "$1" "$2" >> "$REPORT_FILE" 2>/dev/null || true
+}
+
 if ! command -v ffmpeg >/dev/null 2>&1 ||
    ! command -v ffprobe >/dev/null 2>&1; then
   echo "ffmpeg and ffprobe are required. Install them with: sudo apt install ffmpeg" >&2
-  exit 1
-fi
-
-if [[ ! -d "$SERIES_DIR" ]]; then
-  echo "Folder not found: $SERIES_DIR" >&2
   exit 1
 fi
 
@@ -283,11 +312,13 @@ while IFS= read -r -d '' src; do
 
   if [[ -e "$out" || -L "$out" ]]; then
     echo "  Skipping: destination already exists: $out"
+    report "$src" "destination already exists: $out"
     skipped=$((skipped + 1))
     continue
   fi
   if [[ -e "$tmp" || -L "$tmp" ]]; then
     echo "  Skipping: temporary file already exists: $tmp"
+    report "$src" "leftover temporary file exists: $tmp"
     skipped=$((skipped + 1))
     continue
   fi
@@ -297,6 +328,7 @@ while IFS= read -r -d '' src; do
   src_dir=$(dirname -- "$src")
   if ! touch "$src_dir/.ep_write_test" 2>/dev/null; then
     echo "  Skipping: folder is read-only or not writable: $src_dir"
+    report "$src" "folder is read-only or not writable: $src_dir"
     skipped=$((skipped + 1))
     continue
   fi
@@ -304,6 +336,7 @@ while IFS= read -r -d '' src; do
 
   if ! probe "$src"; then
     echo "  Skipping: could not read streams with ffprobe."
+    report "$src" "ffprobe could not read the file (corrupt or unsupported container)"
     skipped=$((skipped + 1))
     continue
   fi
@@ -348,6 +381,7 @@ while IFS= read -r -d '' src; do
   if [[ -n "$unsafe" ]] && ! $FORCE; then
     echo "  Skipping: unusual MP4 codec(s):${unsafe}"
     echo "  Use --force to attempt this file."
+    report "$src" "unusual MP4 codec(s):${unsafe} (use --force to attempt)"
     skipped=$((skipped + 1))
     continue
   fi
@@ -365,6 +399,7 @@ while IFS= read -r -d '' src; do
 
   if ! enough_space "$src"; then
     echo "  Skipping: not enough free space for a safe conversion."
+    report "$src" "not enough free space for a safe conversion"
     skipped=$((skipped + 1))
     continue
   fi
@@ -390,6 +425,7 @@ while IFS= read -r -d '' src; do
       "${audio_args[@]}" \
       -movflags +faststart -f mp4 "$tmp"; then
     echo "  Failed: ffmpeg could not create the MP4."
+    report "$src" "ffmpeg failed to create the MP4 (see Dashboard > Logs for the ffmpeg error)"
     rm -f -- "$tmp"
     CURRENT_TMP=""
     failed=$((failed + 1))
@@ -398,6 +434,7 @@ while IFS= read -r -d '' src; do
 
   if ! verify "$VCOUNT" "$ACOUNT" "$SUBCOUNT" "$src" "$tmp"; then
     echo "  Failed verification: $REASON"
+    report "$src" "output failed verification: $REASON"
     rm -f -- "$tmp"
     CURRENT_TMP=""
     failed=$((failed + 1))
@@ -427,7 +464,9 @@ while IFS= read -r -d '' src; do
       echo "  Warning: could not delete original: $src"
     fi
   fi
-done < <(find "$SERIES_DIR" -type f -iname '*.mkv' -print0)
+done < <(for base in "${FOLDERS[@]}"; do
+  find "$base" -type f -iname '*.mkv' -print0 2>/dev/null
+done)
 
 echo
 echo "Finished: $total file(s) found; $converted converted, $skipped skipped, $failed failed."
