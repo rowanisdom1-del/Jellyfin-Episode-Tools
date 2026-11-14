@@ -188,7 +188,7 @@ def main():
                 skipped += 1
                 continue
             claimed.add(dst)
-            print(rel)
+            print(f"File: {rel}")
             print(f"   -> {wanted}")
             if apply:
                 os.rename(src, dst)

@@ -38,7 +38,7 @@ internal static class ScriptRunner
             args.Add(dir);
         }
 
-        return RunAsync(logger, "python3", "rename_episodes.py", args, 0, progress, cancellationToken);
+        return RunAsync(logger, "python3", "rename_episodes.py", args, CountMediaFiles(dir), progress, cancellationToken);
     }
 
     /// <summary>
@@ -97,6 +97,39 @@ internal static class ScriptRunner
                 MatchCasing = MatchCasing.CaseInsensitive
             };
             return Directory.EnumerateFiles(dir, "*.mkv", options).Count();
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Counts the files the rename script considers (video and subtitle extensions), so the
+    /// rename task can show a progress bar too.
+    /// </summary>
+    private static int CountMediaFiles(string dir)
+    {
+        if (dir.Length == 0)
+        {
+            return 0;
+        }
+
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts",
+            ".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt"
+        };
+
+        try
+        {
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                MatchCasing = MatchCasing.CaseInsensitive
+            };
+            return Directory.EnumerateFiles(dir, "*", options).Count(f => extensions.Contains(Path.GetExtension(f)));
         }
         catch (Exception)
         {

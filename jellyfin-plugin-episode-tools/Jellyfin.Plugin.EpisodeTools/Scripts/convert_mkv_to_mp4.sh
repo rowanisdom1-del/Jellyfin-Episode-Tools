@@ -91,10 +91,14 @@ if $APPLY && command -v flock >/dev/null 2>&1; then
   fi
 fi
 
-# Run conversions at low priority.
+# Run conversions at low priority, so Jellyfin keeps responding when someone is
+# watching while a conversion is running.
 PRIO=()
+if command -v nice >/dev/null 2>&1; then
+  PRIO+=(nice -n 19)
+fi
 if command -v ionice >/dev/null 2>&1; then
-  :
+  PRIO+=(ionice -c 3)
 fi
 
 CURRENT_TMP=""
@@ -287,6 +291,16 @@ while IFS= read -r -d '' src; do
     skipped=$((skipped + 1))
     continue
   fi
+
+  # Read-only locations (network shares, write-protected folders) can never receive the
+  # temporary file, so test that once with a touch instead of failing inside ffmpeg.
+  src_dir=$(dirname -- "$src")
+  if ! touch "$src_dir/.ep_write_test" 2>/dev/null; then
+    echo "  Skipping: folder is read-only or not writable: $src_dir"
+    skipped=$((skipped + 1))
+    continue
+  fi
+  rm -f -- "$src_dir/.ep_write_test"
 
   if ! probe "$src"; then
     echo "  Skipping: could not read streams with ffprobe."
