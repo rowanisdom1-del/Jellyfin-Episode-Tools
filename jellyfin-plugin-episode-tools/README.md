@@ -1,66 +1,109 @@
 # Episode Tools (Jellyfin 12 plugin)
 
-Adds four tasks under **Dashboard > Scheduled Tasks > Episode Tools**, each with a Run button:
+A Jellyfin plugin that keeps an anime/series library tidy: it renames episodes, losslessly
+remuxes MKV to MP4, repairs wrong subtitle defaults (the classic "opening lyrics instead of
+dialogue" problem), audits the library for duplicates, and reports everything in dashboard
+pages instead of raw logs.
 
-1. Rename episodes: preview (changes nothing)
-2. Rename episodes (`Show - S01E02 - Title.mkv`)
-3. Convert MKV to MP4: preview (changes nothing)
-4. Convert MKV to MP4 (lossless, no re-encoding)
+Everything runs under **Dashboard > Scheduled Tasks > Episode Tools** — seven tasks, each
+with a Run button:
 
-The output of every run is in **Dashboard > Logs** (search for `Episode Tools`). The two scripts are
-embedded in the DLL, so there is only one file to install. Settings (folders, delete originals) are on
-the plugin's own settings page.
+1. **Rename episodes: preview** (changes nothing)
+2. **Rename episodes** — `Show - S01E02 - Title.mkv`, subtitle language tags kept
+3. **Convert MKV to MP4: preview** (changes nothing)
+4. **Convert MKV to MP4 (lossless)** — stream copy, no re-encoding, output verified
+5. **Check subtitles** (auto-runs every 3 days) — flags signs/songs/lyrics tracks,
+   lyrics-heavy content (♪ ratio) and broken timing (subtitles flashing < 0.8s)
+6. **Re-convert MKV to MP4 (replaces existing .mp4)** — apply new settings/preferences to
+   already-converted episodes; replaces the old file only after verification
+7. **Audit library** — duplicate episodes (same show/season/episode in multiple files) and
+   the largest video files
 
-Built for Jellyfin 12.x (.NET 10, ABI 12.0.0.0).
+## Dashboard pages
 
-## 1. Build the DLL with GitHub
+Under **Dashboard > Plugins > Episode Tools**:
 
-1. Create a new repository on GitHub (for example `Jellyfin-Episode-Tools`) and upload everything in this
-   folder, including the hidden `.github` folder.
-2. Open the **Actions** tab. The "Build plugin" run starts by itself. If it turns red, open it and copy the
-   error text.
-3. To get a download link that works with `wget`, create a release: on your computer in the repo folder run
-   `git tag v1.0.0 && git push origin v1.0.0`, or use GitHub's "Releases > Draft a new release" with the tag `v1.0.0`.
-   The workflow then attaches `EpisodeTools_1.0.0.0.zip` to the release.
+| Page | What you get |
+|---|---|
+| **Episode Tools** (settings) | Up to 5 rename folders, up to 5 scan folders, delete-originals, audio-to-AAC, faststart (off = ~2x faster conversion), drop signs/songs tracks, minimum free space guard |
+| **Episode Tools Shows** | Every show with episode counts, .mkv-to-convert count and subtitle languages found — plus **per-show default subtitle and audio language** dropdowns, applied at the next conversion |
+| **Episode Tools Report** | Every .mkv that could not be converted, and exactly why |
+| **Episode Tools Sub Check** | Subtitle problems per episode: default track is a signs/songs/lyrics track, lyrics-heavy content, ultra-short cues |
+| **Episode Tools Audit** | Duplicate episodes and the largest files, grouped and readable |
 
-## 2. Install on the Pi (Jellyfin installed with apt)
+## How conversions work
+
+- Video and audio are **copied, not re-encoded** — quality stays identical.
+- Text subtitles become `mov_text`; image-based (PGS/VobSub) tracks are skipped with a note.
+- **Safety checks on every output:** track counts, duration within 1%, plausible size — the
+  `.mp4` is only kept when verification passes; the `.mkv` is untouched unless you enable
+  deleting.
+- **Track selection:** per-show language preferences and signs/songs filtering are applied
+  during the remux; the first matching audio/subtitle track is flagged as the player default.
+  A language filter that matches nothing keeps everything — it never silently removes all
+  subtitles or all audio.
+- Files with unusual codecs are skipped with a reason (overridable per run with `--force`);
+  DTS/TrueHD/FLAC audio can be re-encoded to AAC per setting.
+- Runs at `nice 19` + `ionice -c3` so Jellyfin stays responsive; a lock prevents two
+  conversion runs at once; the stop button cleans up half-finished `.part` files.
+- `faststart` is optional: off = the file is written once instead of twice (roughly twice as
+  fast on slow drives); Jellyfin streams with range requests, so playback is unaffected.
+
+## Requirements
+
+- Jellyfin 12.x (.NET 10, ABI 12.0.0.0)
+- `python3`, `bash`, `ffmpeg`/`ffprobe` (Jellyfin's bundled ffmpeg is used automatically)
+
+## Build with GitHub Actions
+
+Any push builds the plugin automatically (`.github/workflows/build.yml`) and keeps the zip
+as an artifact. To publish a release, push a tag:
+
+```bash
+git tag v2.0.0 && git push origin v2.0.0
+```
+
+The workflow attaches `EpisodeTools_2.0.0.0.zip` to the release. Download from the
+[Releases page](../../releases).
+
+## Install
+
+**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_2.0.0.0/`
+(the DLL must sit directly in that folder) and restart the container. The container needs
+`python3` for the rename/audit tasks — the official Jellyfin image has ffmpeg bundled.
+
+**apt install (Debian):**
 
 ```bash
 sudo apt install unzip acl
-wget https://github.com/<your-user>/<your-repo>/releases/download/v1.0.0/EpisodeTools_1.0.0.0.zip
-sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_1.0.0.0
-sudo unzip -o EpisodeTools_1.0.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_1.0.0.0
-sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_1.0.0.0
-```
-
-Jellyfin runs as the user `jellyfin`, which must be allowed to rename files in your media folder:
-
-```bash
+wget https://github.com/<your-user>/<your-repo>/releases/download/v2.0.0/EpisodeTools_2.0.0.0.zip
+sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_2.0.0.0
+sudo unzip -o EpisodeTools_2.0.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_2.0.0.0
+sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_2.0.0.0
 sudo setfacl -R -m u:jellyfin:rwX /mnt/storage/media
 sudo setfacl -R -d -m u:jellyfin:rwX /mnt/storage/media
-```
-
-Then restart Jellyfin and open the dashboard:
-
-```bash
 sudo systemctl restart jellyfin
 ```
 
-Requirements on the server: `python3`, `bash` and `ffmpeg` (`sudo apt install python3 ffmpeg`).
-
 ## Notes
 
-- Jellyfin in Docker: the plugin folder is `<your config folder>/plugins/EpisodeTools_1.0.0.0`, but the
-  container has no `python3`, so the rename tasks will fail with a clear message.
-- Folders: converting scans the whole `/mnt/storage/media` (series and movies). Renaming stays on
-  `/mnt/storage/media/Series`, because the rename script takes the first folder under its start folder as the
-  show name.
-- If the settings page does not open, the defaults above still work. The settings file
-  is `/var/lib/jellyfin/plugins/configurations/Jellyfin.Plugin.EpisodeTools.xml`.
-- Converted `.mp4` files are owned by the `jellyfin` user and readable by everyone.
-- Stop button: stopping a convert task removes its half-finished `.part` file.
-- Audio: files with DTS, TrueHD or FLAC audio cannot go into an MP4 as they are. With the setting
-  "Convert DTS, TrueHD and FLAC audio to AAC" (on by default) only those audio tracks are re-encoded to AAC
-  (5.1 at 448k, stereo at 192k) and the video is still copied untouched. Turn it off to skip such files instead.
-  If you also delete the .mkv, the original lossless audio is gone for good.
-- Updating the plugin: unzip the new zip over the existing plugin folder, then restart Jellyfin.
+- Settings are stored in
+  `plugins/configurations/Jellyfin.Plugin.EpisodeTools.xml` (or
+  `/var/lib/jellyfin/plugins/configurations/` for apt installs).
+- The rename script treats the first folder under each rename folder as the show name, so
+  point rename folders at series roots only.
+- Renaming is idempotent and never overwrites: already-correct files are skipped, targets
+  that exist are reported.
+- Updating: replace the plugin folder's contents with the new zip's and restart Jellyfin.
+
+## Version history
+
+- **2.0.0** — library audit (duplicates + largest files), minimum-free-space guard, sub
+  check auto-schedule, fixed signs/songs filter matching "subtitles", fixed .ass parsing,
+  safer track extraction.
+- **1.5.0** — subtitle check task + page, drop signs/songs tracks, re-convert task.
+- **1.4.0** — five rename folders, Shows page with per-show subtitle/audio defaults.
+- **1.3.0** — optional faststart (faster conversions on slow drives).
+- **1.2.0** — five scan folders, convert report page.
+- **1.1.0** — low-priority conversions, read-only folder skip, rename progress bar.
+- **1.0.0** — first release: rename + lossless MKV→MP4 conversion.

@@ -84,7 +84,7 @@ def main():
         for root, dirs, files in os.walk(base):
             dirs.sort()
             rel_root = os.path.relpath(root, base)
-            show = rel_root.split(os.sep)[0] if rel_root != "." else ""
+            show = rel_root.split(os.sep)[0] if rel_root != "." else "(root)"
             for fname in sorted(files):
                 ext = os.path.splitext(fname)[1].lower()
                 if ext not in VIDEO_EXT:
@@ -97,7 +97,7 @@ def main():
                 checked += 1
                 base_size += size
                 all_files.append((size, path))
-                key = episode_key(show, fname) if show else episode_key("", fname)
+                key = episode_key(show, fname)
                 if key:
                     groups.setdefault(key, []).append((size, path))
         folder_totals.append((base_size, base))

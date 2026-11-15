@@ -118,11 +118,12 @@ def analyze_ass_text(text):
         g = m.groups()
         start = ts_to_ms(g[0], g[1], g[2], g[3])
         end = ts_to_ms(g[4], g[5], g[6], g[7])
-        # Dialogue line: layer,start,end,style,name,margin,margin,margin,effect,text
+        # Dialogue line: layer,start,end,style,name,marginL,marginR,marginV,effect,text.
+        # The regex consumed layer/start/end; the text is everything after the next 6 fields.
         rest = text[m.end():].split("\n", 1)[0]
-        # skip the 8 fixed fields before the text
-        parts = rest.split(",", 8)
-        cue_text = parts[8] if len(parts) > 8 else ""
+        rest = rest.lstrip(",")
+        tokens = rest.split(",")
+        cue_text = ",".join(tokens[6:]) if len(tokens) > 6 else ""
         cue_text = re.sub(r"\{[^}]*\}", "", cue_text)  # strip override tags
         if not cue_text.strip():
             continue

@@ -338,7 +338,7 @@ enough_space() {
 verify() {
   local expected_v=$1 expected_a=$2 expected_s=$3 src=$4 new=$5
   local d1 d2 new_size
-  local VCOUNT ACOUNT SUBCOUNT PIC_SUBS
+  local VCOUNT ACOUNT SUBCOUNT PIC_SUBS ALANGS AUDIO_INDICES SUB_INDICES SLANGS STITLES
   local -a VCODECS ACODECS ACHANNELS VIDEO_MAPS AUDIO_MAPS SUB_MAPS
 
   if [[ ! -s "$new" ]]; then
@@ -478,12 +478,18 @@ while IFS= read -r -d '' src; do
           kept=$((kept + 1))
         fi
       done
-      SUB_MAPS=("${new_sub_maps[@]}")
-      SUB_INDICES=("${new_sub_indices[@]}")
-      SLANGS=("${new_sub_langs[@]}")
-      STITLES=("${new_sub_titles[@]}")
-      SUBCOUNT=$kept
-      echo "  Show preference ($show): keeping only '$SUBPREF' subtitles ($kept of $orig_sub_count found)."
+      if (( kept > 0 )); then
+        SUB_MAPS=("${new_sub_maps[@]}")
+        SUB_INDICES=("${new_sub_indices[@]}")
+        SLANGS=("${new_sub_langs[@]}")
+        STITLES=("${new_sub_titles[@]}")
+        SUBCOUNT=$kept
+        echo "  Show preference ($show): keeping only '$SUBPREF' subtitles ($kept of $orig_sub_count found)."
+      else
+        # Safety: a filter that matches nothing (e.g. all tracks tagged 'und') must never
+        # silently produce a file without subtitles.
+        echo "  Show preference ($show): no '$SUBPREF' subtitle track found; keeping all subtitles."
+      fi
       set_default_disposition=true
     fi
   fi
