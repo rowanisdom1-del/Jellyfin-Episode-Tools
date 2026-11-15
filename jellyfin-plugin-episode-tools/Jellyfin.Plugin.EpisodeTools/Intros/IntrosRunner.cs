@@ -492,12 +492,17 @@ internal static class IntrosRunner
                     var m = SeasonRegex.Match(name);
                     var season = m.Success ? $"S{int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture):00}" : "S?";
 
+                    // Compare only within the file's own directory: episodes of one season
+                    // live in one folder, and this keeps merged/cross-show groups (whole NAS
+                    // shares enumerated as a single show) from producing O(n^2) garbage work.
+                    var seasonKey = Path.GetDirectoryName(file) + "|" + season;
+
                     jobs.Add(new Job
                     {
                         Path = file,
                         Show = show,
                         Season = season,
-                        SeasonKey = showDir + "|" + season
+                        SeasonKey = seasonKey
                     });
                 }
 
