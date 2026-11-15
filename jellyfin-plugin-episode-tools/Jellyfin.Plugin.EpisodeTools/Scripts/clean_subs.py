@@ -56,8 +56,22 @@ def fmt_srt_time(seconds):
 
 
 def clean_text(text):
-    # ASS override tags, and any literal tag-like leftovers from earlier conversions.
-    text = OVERRIDE_RE.sub("", text)
+    # Split into tags and literal text so drawing mode can be tracked: ASS signs
+    # rendered as vector graphics ("{\p1}m 1 -5 l 4 -62 ...{\p0}") store path
+    # coordinates as literal text - left in, they flash as strings of random
+    # numbers and overflow mov_text's encoder (ERANGE).
+    parts = re.split(r"(\{[^}]*\})", text)
+    drawing = False
+    kept = []
+    for part in parts:
+        if part.startswith("{") and part.endswith("}"):
+            match = re.search(r"\\p(\d+)", part)
+            if match:
+                drawing = match.group(1) != "0"
+            continue
+        if not drawing:
+            kept.append(part)
+    text = "".join(kept)
     text = text.replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
     return re.sub(r"[ \t]+", " ", text).strip()
 
