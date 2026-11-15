@@ -44,7 +44,7 @@ internal static class ShowConvertRunner
                 try
                 {
                     await ScriptRunner.RunConvertAsync(
-                        loggerLocal, true, progress, ct, redo: false, folderOverride: folder)
+                        loggerLocal, true, progress, ct, redo: false, folderOverride: folder, remuxExisting: true)
                         .ConfigureAwait(false);
                     _result = "finished";
                     _lastMessage = "finished";

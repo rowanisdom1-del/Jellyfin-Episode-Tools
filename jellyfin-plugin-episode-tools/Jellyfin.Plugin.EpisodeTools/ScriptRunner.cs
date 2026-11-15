@@ -50,7 +50,7 @@ internal static class ScriptRunner
     /// whose .mp4 already exists, replacing it after verification. With <paramref name="folderOverride"/>
     /// only that single folder is scanned (per-show conversion from the Shows tab).
     /// </summary>
-    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null)
+    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null, bool remuxExisting = false)
     {
         var cfg = GetConfig();
         var args = new List<string>();
@@ -61,6 +61,12 @@ internal static class ScriptRunner
             {
                 args.Add("--redo");
                 logger.LogWarning("[Episode Tools] Re-convert run: existing .mp4 files will be REPLACED (only after the new file passes verification).");
+            }
+
+            if (remuxExisting)
+            {
+                args.Add("--remux-existing");
+                logger.LogInformation("[Episode Tools] Re-muxing existing .mp4 files that have no .mkv source (settings re-applied, subtitles cleaned, replaced after verification).");
             }
 
             if (cfg.DeleteOriginalsAfterConvert)
@@ -404,6 +410,20 @@ internal static class ScriptRunner
         bool notifyApply = false)
     {
         var scriptPath = ExtractScript(resourceName);
+
+        // The convert script cleans subtitles through its helper; unpack it next to the
+        // script so the bash side can find it (it looks for clean_subs.py beside itself).
+        if (resourceName == "convert_mkv_to_mp4.sh")
+        {
+            try
+            {
+                ExtractScript("clean_subs.py");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "[Episode Tools] Could not unpack clean_subs.py; subtitles convert without cleaning.");
+            }
+        }
 
         // "sh -c" lets us set a umask first, so renamed and converted files stay readable for everybody
         // (Jellyfin may run with a strict umask). "$0" is the interpreter, "$@" the script and its arguments.

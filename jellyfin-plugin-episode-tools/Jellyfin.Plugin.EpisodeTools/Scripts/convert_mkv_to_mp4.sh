@@ -26,6 +26,7 @@ FASTSTART=true
 DROP_SIGNS_SONGS=false
 DROP_GARBAGE_SUBS=false
 REDO=false
+REMUX=false
 MIN_FREE_GB=10
 REPORT_FILE=""
 PREFS_FILE=""
@@ -62,6 +63,9 @@ Options:
                        skipped silently when python3 is missing.
   --redo               Also convert files whose .mp4 already exists and REPLACE the
                        .mp4 after verification. Use after changing preferences/settings.
+  --remux-existing     Also re-mux existing .mp4 files that have no .mkv source,
+                       replacing them after verification. Re-applies track preferences
+                       and cleans subtitle text. Used by the per-show Convert button.
   --min-free-gb N      Require at least N GB free on the destination before converting
                        a file (default 10). Files below the threshold are skipped.
   -h, --help           Show this help.
@@ -81,6 +85,7 @@ while [[ $# -gt 0 ]]; do
     --drop-signs-songs) DROP_SIGNS_SONGS=true ;;
     --drop-garbage-subs) DROP_GARBAGE_SUBS=true ;;
     --redo) REDO=true ;;
+    --remux-existing) REMUX=true ;;
     --min-free-gb)
       if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
         echo "--min-free-gb needs a number (see --help)." >&2
@@ -230,9 +235,13 @@ if command -v ionice >/dev/null 2>&1; then
 fi
 
 CURRENT_TMP=""
+CLEAN_DIR=""
 cleanup() {
   if [[ -n "$CURRENT_TMP" ]]; then
     rm -f -- "$CURRENT_TMP"
+  fi
+  if [[ -n "${CLEAN_DIR:-}" ]]; then
+    rm -rf -- "$CLEAN_DIR"
   fi
 }
 trap cleanup EXIT
@@ -426,13 +435,20 @@ total=0
 
 while IFS= read -r -d '' src; do
   total=$((total + 1))
-  out="${src%.*}.mp4"
+  # MP4 sources (remux-existing mode) replace themselves; MKV sources get a new MP4.
+  if [[ "${src,,}" == *.mp4 ]]; then
+    INPLACE=true
+    out="$src"
+  else
+    INPLACE=false
+    out="${src%.*}.mp4"
+  fi
   tmp="${out}.part"
 
   echo
   echo "File: $src"
 
-  if [[ -e "$out" || -L "$out" ]] && ! $REDO; then
+  if [[ -e "$out" || -L "$out" ]] && ! $REDO && ! $INPLACE; then
     echo "  Skipping: destination already exists: $out"
     report "$src" "destination already exists: $out"
     skipped=$((skipped + 1))
@@ -707,6 +723,9 @@ fi
 
   if ! $APPLY; then
     echo "  Would convert: $VCOUNT video, $ACOUNT audio, $SUBCOUNT text subtitle stream(s)"
+    if [[ "${src,,}" == *.mp4 ]]; then
+      echo "  Would re-mux: existing MP4 (re-apply settings, clean subtitles, replace after verification)"
+    fi
     [[ -n "$unsafe" ]] && echo "  Warning: --force would be required for:${unsafe}"
     [[ -n "$unsafe_audio" ]] && $AUDIO_TO_AAC && echo "  Audio would be re-encoded to AAC:${unsafe_audio}"
     continue
@@ -725,7 +744,37 @@ fi
     continue
   }
 
-  maps=("${VIDEO_MAPS[@]}" "${AUDIO_MAPS[@]}" "${SUB_MAPS[@]}")
+  # Clean the kept subtitle streams: strip style tags and merge the micro-cues of
+  # typewriter/karaoke tracks, otherwise the conversion to mov_text flashes literal
+  # garbage (e.g. "{=63}") and one cue per letter strobes on screen.
+  declare -A CLEAN_MAP=()
+  CLEANED_INPUTS=()
+  if $APPLY && (( ${#SUB_INDICES[@]} > 0 )); then
+    clean_py="$(dirname -- "$0")/clean_subs.py"
+    if [[ -f "$clean_py" ]] && command -v python3 >/dev/null 2>&1; then
+      CLEAN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/epclean.XXXXXX")
+      while IFS=$'\t' read -r cidx cpath; do
+        [[ -n "${cpath:-}" ]] || continue
+        CLEAN_MAP["$cidx"]="$cpath"
+      done < <(python3 "$clean_py" "$src" "$CLEAN_DIR" "${SUB_INDICES[@]}" 2>/dev/null)
+      if (( ${#CLEAN_MAP[@]} > 0 )); then
+        echo "  Cleaned ${#CLEAN_MAP[@]} subtitle stream(s) (style tags stripped, micro-cues merged)."
+      fi
+    fi
+  fi
+
+  maps=("${VIDEO_MAPS[@]}" "${AUDIO_MAPS[@]}")
+  extra_input=1
+  for i in "${SUB_INDICES[@]}"; do
+    cleaned="${CLEAN_MAP[$i]:-}"
+    if [[ -n "$cleaned" ]]; then
+      CLEANED_INPUTS+=(-i "$cleaned")
+      maps+=(-map "${extra_input}:0")
+      extra_input=$((extra_input + 1))
+    else
+      maps+=(-map "0:${i}")
+    fi
+  done
   CURRENT_TMP=$tmp
 
   movflags=()
@@ -739,6 +788,7 @@ fi
   echo "  Converting..."
   if ! "${PRIO[@]}" ffmpeg -nostdin -hide_banner -loglevel warning \
       -i "$src" \
+      "${CLEANED_INPUTS[@]}" \
       "${maps[@]}" \
       -map_metadata 0 -map_chapters 0 \
       -c copy -c:s mov_text \
@@ -763,7 +813,8 @@ fi
   fi
 
   # -n prevents overwriting a destination created by another process.
-  if $REDO; then
+  # Re-muxing in place replaces the source itself (it IS the destination).
+  if $REDO || $INPLACE; then
     if ! mv -fT -- "$tmp" "$out"; then
       echo "  Failed: could not replace the existing .mp4."
       report "$src" "could not replace the existing .mp4"
@@ -786,7 +837,8 @@ fi
   echo "  Created and verified: $out"
   converted=$((converted + 1))
 
-  if $DELETE; then
+  # Never delete in remux mode: there $src is the freshly replaced output.
+  if $DELETE && ! $INPLACE; then
     current_identity=$(stat -c '%d:%i:%s:%y' -- "$src" 2>/dev/null || true)
     if [[ "$current_identity" != "$source_identity" ]]; then
       echo "  Kept original: it changed during conversion."
@@ -796,9 +848,23 @@ fi
       echo "  Warning: could not delete original: $src"
     fi
   fi
-done < <(for base in "${FOLDERS[@]}"; do
-  find "$base" -type f -iname '*.mkv' -print0 2>/dev/null
-done)
+done < <(
+  for base in "${FOLDERS[@]}"; do
+    find "$base" -type f -iname '*.mkv' -print0 2>/dev/null
+  done
+  if $REMUX; then
+    for base in "${FOLDERS[@]}"; do
+      while IFS= read -r -d '' mp4; do
+        # MP4s that still have an MKV source are handled by the normal pass.
+        if find "$(dirname -- "$mp4")" -maxdepth 1 \
+            -iname "$(basename -- "${mp4%.*}").mkv" -print -quit 2>/dev/null | grep -q .; then
+          continue
+        fi
+        printf '%s\0' "$mp4"
+      done < <(find "$base" -type f -iname '*.mp4' -print0 2>/dev/null)
+    done
+  fi
+)
 
 echo
 echo "Finished: $total file(s) found; $converted converted, $skipped skipped, $failed failed."

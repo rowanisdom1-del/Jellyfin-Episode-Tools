@@ -1074,7 +1074,13 @@
                 });
             }
 
-            function convertShow(folder, btn) {
+            function convertShow(folder, btn, show) {
+                // Shows that already have MP4s get those re-muxed too (that is how settings
+                // reach files whose MKV source is gone); confirm before touching them.
+                if (show && show.episodes > show.mkv && !window.confirm(
+                        'Convert this show?\n\nExisting MP4 files without an MKV source will also be re-muxed to re-apply your settings and clean their subtitles. It is lossless (stream copy) and each file is only replaced after verification.')) {
+                    return;
+                }
                 btn.disabled = true;
                 btn.textContent = '…';
                 ApiClient.ajax({
@@ -1200,7 +1206,7 @@
                         convBtn.textContent = 'Convert';
                         convBtn.title = 'Convert this show now (remuxes its .mkv files with the current settings)';
                         convBtn.addEventListener('click', function () {
-                            convertShow(s.folder || '', convBtn);
+                            convertShow(s.folder || '', convBtn, s);
                         });
                         tdConv.appendChild(convBtn);
                         tr.appendChild(tdConv);
