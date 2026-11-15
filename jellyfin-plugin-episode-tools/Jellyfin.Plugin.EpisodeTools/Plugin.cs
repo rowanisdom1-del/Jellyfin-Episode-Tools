@@ -50,9 +50,14 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
+        // MenuSection "server" puts the entry in the Dashboard sidebar under Plugins.
         yield return new PluginPageInfo
         {
             Name = Name,
+            DisplayName = "Episode Tools",
+            EnableInMainMenu = false,
+            MenuSection = "server",
+            MenuIcon = "build",
             EmbeddedResourcePath = string.Format(
                 CultureInfo.InvariantCulture,
                 "{0}.Configuration.configPage.html",

@@ -3,102 +3,158 @@
 <head>
     <meta charset="utf-8">
     <title>Episode Tools</title>
+    <style>
+        .epTools-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0 0 1.2em 0;
+        }
+        .epTools-nav a {
+            padding: 8px 16px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.06);
+            color: inherit;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .epTools-nav a.active {
+            background: #00a4dc;
+            color: #fff;
+        }
+        .epTools-nav a:hover {
+            background: rgba(255,255,255,0.12);
+        }
+        .epTools-card {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            padding: 1em 1.4em 1.4em 1.4em;
+            margin-bottom: 1.2em;
+        }
+        .epTools-card h3 {
+            margin: 0.2em 0 0.6em 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: #00a4dc;
+        }
+        .epTools-card .epTools-desc {
+            margin: 0.4em 0 0.9em 0;
+        }
+    </style>
 </head>
 <body>
 <div id="EpisodeToolsConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
     <div data-role="content">
         <div class="content-primary">
             <h2>Episode Tools</h2>
-            <p>The tasks are under Dashboard &gt; Scheduled Tasks &gt; Episode Tools. The output of each run is in Dashboard &gt; Logs. Per-show subtitle/audio defaults are on the <b>Episode Tools Shows</b> page; convert problems are on the <b>Episode Tools Report</b> page.</p>
+            <div class="epTools-nav" id="epToolsNav"></div>
+            <p>The tasks are under Dashboard &gt; Scheduled Tasks &gt; Episode Tools. The output of each run is in Dashboard &gt; Logs. Per-show subtitle/audio defaults are on the <b>Shows</b> page; convert problems are on the <b>Report</b> page.</p>
+
             <form id="EpisodeToolsConfigForm">
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder1">Series folder 1 (for renaming)</label>
-                    <input id="RenameFolder1" name="RenameFolder1" type="text" is="emby-input" />
-                    <div class="fieldDescription">Must be a folder that directly contains one sub folder per series. You can set up to five series folders (below); leave the rest empty. Do not point this at the whole media folder: the first folder name would be used as the show name.</div>
+                <div class="epTools-card">
+                    <h3>📁 Folders</h3>
+                    <p class="epTools-desc">Rename folders must directly contain one sub folder per series (up to five). Scan folders are searched recursively for .mkv files (up to five).</p>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder1">Series folder 1 (for renaming)</label>
+                        <input id="RenameFolder1" name="RenameFolder1" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder2">Series folder 2 (optional)</label>
+                        <input id="RenameFolder2" name="RenameFolder2" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder3">Series folder 3 (optional)</label>
+                        <input id="RenameFolder3" name="RenameFolder3" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder4">Series folder 4 (optional)</label>
+                        <input id="RenameFolder4" name="RenameFolder4" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder5">Series folder 5 (optional)</label>
+                        <input id="RenameFolder5" name="RenameFolder5" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder1">Scan folder 1 (for converting .mkv to .mp4)</label>
+                        <input id="ScanFolder1" name="ScanFolder1" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder2">Scan folder 2 (optional)</label>
+                        <input id="ScanFolder2" name="ScanFolder2" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder3">Scan folder 3 (optional)</label>
+                        <input id="ScanFolder3" name="ScanFolder3" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder4">Scan folder 4 (optional)</label>
+                        <input id="ScanFolder4" name="ScanFolder4" type="text" is="emby-input" />
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder5">Scan folder 5 (optional)</label>
+                        <input id="ScanFolder5" name="ScanFolder5" type="text" is="emby-input" />
+                    </div>
                 </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder2">Series folder 2 (optional)</label>
-                    <input id="RenameFolder2" name="RenameFolder2" type="text" is="emby-input" />
+
+                <div class="epTools-card">
+                    <h3>🎬 Conversion</h3>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Minimum free space before converting (GB)</label>
+                        <input id="MinFreeSpaceGb" name="MinFreeSpaceGb" type="number" min="0" max="2000" step="1" is="emby-input" />
+                        <div class="fieldDescription">Files are only converted when at least this much space is free on the destination (default 10). Protects full drives.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="DeleteOriginalsAfterConvert" name="DeleteOriginalsAfterConvert" type="checkbox" is="emby-checkbox" />
+                            <span>Delete each .mkv after its .mp4 has been checked</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">Off by default. When off, both the .mkv and the .mp4 stay (Jellyfin may then show duplicates until you remove the .mkv files).</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="FaststartOptimize" name="FaststartOptimize" type="checkbox" is="emby-checkbox" />
+                            <span>Optimize MP4s for web playback (faststart) — slower conversion</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
+                    </div>
                 </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder3">Series folder 3 (optional)</label>
-                    <input id="RenameFolder3" name="RenameFolder3" type="text" is="emby-input" />
+
+                <div class="epTools-card">
+                    <h3>💬 Audio &amp; subtitles</h3>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="ConvertUnusualAudioToAac" name="ConvertUnusualAudioToAac" type="checkbox" is="emby-checkbox" />
+                            <span>Convert DTS, TrueHD and FLAC audio to AAC while converting</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On: files with such audio are no longer skipped. Only those audio tracks are re-encoded to AAC (5.1 at 448k, stereo at 192k); the video is copied untouched and AAC tracks stay as they are. Off: those files are skipped. If you also delete the .mkv, the original lossless audio is gone for good.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="DropSignsSongs" name="DropSignsSongs" type="checkbox" is="emby-checkbox" />
+                            <span>Drop signs/songs/lyrics subtitle tracks when converting</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks titled signs, songs, lyrics, karaoke or titles are left out of the MP4 when a dialogue track exists — players otherwise show song lyrics flashing over the picture. Off: all tracks are kept. Check which episodes are affected on the Episode Tools Sub Check page.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="DropGarbageSubs" name="DropGarbageSubs" type="checkbox" is="emby-checkbox" />
+                            <span>Drop garbage subtitle tracks when converting (random numbers, ads, junk)</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks whose text is mostly numbers, ad/spam lines or OCR junk are left out when a better track exists. Requires python3 on the server; skipped silently when it is missing.</div>
+                    </div>
                 </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder4">Series folder 4 (optional)</label>
-                    <input id="RenameFolder4" name="RenameFolder4" type="text" is="emby-input" />
+
+                <div class="epTools-card">
+                    <h3>🔔 Notifications</h3>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="NotifyWebhookUrl">Notify webhook URL (optional)</label>
+                        <input id="NotifyWebhookUrl" name="NotifyWebhookUrl" type="text" is="emby-input" />
+                        <div class="fieldDescription">When set, a POST request is sent here after every convert run finishes (apply mode). Works with ntfy.sh, Discord (via a relay) or your own script. Leave empty to disable.</div>
+                    </div>
                 </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder5">Series folder 5 (optional)</label>
-                    <input id="RenameFolder5" name="RenameFolder5" type="text" is="emby-input" />
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder1">Scan folder 1 (for converting .mkv to .mp4)</label>
-                    <input id="ScanFolder1" name="ScanFolder1" type="text" is="emby-input" />
-                    <div class="fieldDescription">All sub folders are searched too. You can set up to five folders (below). Leave the rest empty. Examples: /mnt/storage/media or /media/sussyaname.</div>
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder2">Scan folder 2 (optional)</label>
-                    <input id="ScanFolder2" name="ScanFolder2" type="text" is="emby-input" />
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder3">Scan folder 3 (optional)</label>
-                    <input id="ScanFolder3" name="ScanFolder3" type="text" is="emby-input" />
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder4">Scan folder 4 (optional)</label>
-                    <input id="ScanFolder4" name="ScanFolder4" type="text" is="emby-input" />
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder5">Scan folder 5 (optional)</label>
-                    <input id="ScanFolder5" name="ScanFolder5" type="text" is="emby-input" />
-                    <div class="fieldDescription">After converting, open Dashboard > Plugins > Episode Tools > Episode Tools Report to see every .mkv that could not be converted and why.</div>
-                </div>
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input id="DeleteOriginalsAfterConvert" name="DeleteOriginalsAfterConvert" type="checkbox" is="emby-checkbox" />
-                        <span>Delete each .mkv after its .mp4 has been checked</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">Off by default. When off, both the .mkv and the .mp4 stay (Jellyfin may then show duplicates until you remove the .mkv files).</div>
-                </div>
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input id="ConvertUnusualAudioToAac" name="ConvertUnusualAudioToAac" type="checkbox" is="emby-checkbox" />
-                        <span>Convert DTS, TrueHD and FLAC audio to AAC while converting</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">On: files with such audio are no longer skipped. Only those audio tracks are re-encoded to AAC (5.1 at 448k, stereo at 192k); the video is copied untouched and AAC tracks stay as they are. Off: those files are skipped. If you also delete the .mkv, the original lossless audio is gone for good.</div>
-                </div>
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input id="FaststartOptimize" name="FaststartOptimize" type="checkbox" is="emby-checkbox" />
-                        <span>Optimize MP4s for web playback (faststart) — slower conversion</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Minimum free space before converting (GB)</label>
-                    <input id="MinFreeSpaceGb" name="MinFreeSpaceGb" type="number" min="0" max="2000" step="1" is="emby-input" />
-                    <div class="fieldDescription">Files are only converted when at least this much space is free on the destination (default 10). Protects full drives.</div>
-                </div>
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input id="DropSignsSongs" name="DropSignsSongs" type="checkbox" is="emby-checkbox" />
-                        <span>Drop signs/songs/lyrics subtitle tracks when converting</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks titled signs, songs, lyrics, karaoke or titles are left out of the MP4 when a dialogue track exists — players otherwise show song lyrics flashing over the picture. Off: all tracks are kept. Check which episodes are affected on the Episode Tools Sub Check page.</div>
-                </div>
-                <div class="checkboxContainer checkboxContainer-withDescription">
-                    <label class="emby-checkbox-label">
-                        <input id="DropGarbageSubs" name="DropGarbageSubs" type="checkbox" is="emby-checkbox" />
-                        <span>Drop garbage subtitle tracks when converting (random numbers, ads, junk)</span>
-                    </label>
-                    <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks whose text is mostly numbers, ad/spam lines or OCR junk are left out when a better track exists. Requires python3 on the server; skipped silently when it is missing.</div>
-                </div>
-                <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="NotifyWebhookUrl">Notify webhook URL (optional)</label>
-                    <input id="NotifyWebhookUrl" name="NotifyWebhookUrl" type="text" is="emby-input" />
-                    <div class="fieldDescription">When set, a POST request is sent here after every convert run finishes (apply mode). Works with ntfy.sh, Discord (via a relay) or your own script. Leave empty to disable.</div>
-                </div>
+
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>
@@ -108,6 +164,38 @@
         </div>
     </div>
     <script type="text/javascript">
+        // Sidebar-style navigation between the plugin's pages.
+        (function () {
+            var pages = [
+                ['Episode Tools', ''],
+                ['Shows', 'Episode Tools Shows'],
+                ['Report', 'Episode Tools Report'],
+                ['Sub Check', 'Episode Tools Sub Check'],
+                ['Audit', 'Episode Tools Audit']
+            ];
+            // Detect which page we are on from the location hash.
+            var hash = (window.location.hash || '').toLowerCase();
+            var nav = document.querySelector('#epToolsNav');
+            pages.forEach(function (p) {
+                var a = document.createElement('a');
+                a.textContent = p[0];
+                a.href = '#';
+                var active = (p[1] === '') ? hash.indexOf('configurationpage') === -1 || hash.indexOf('name=episode+tools+') === -1
+                    : hash.indexOf(encodeURIComponent(p[1]).toLowerCase()) !== -1 || hash.indexOf(p[1].toLowerCase().replace(/ /g, '+')) !== -1;
+                if (p[1] === '') { active = hash.indexOf('name=episode+tools+') === -1; }
+                if (active) { a.className = 'active'; }
+                a.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    if (p[1] === '') {
+                        Dashboard.navigate('configurationpage?name=' + encodeURIComponent('Episode Tools'));
+                    } else {
+                        Dashboard.navigate('configurationpage?name=' + encodeURIComponent(p[1]));
+                    }
+                });
+                nav.appendChild(a);
+            });
+        })();
+
         var EpisodeToolsConfig = {
             pluginUniqueId: '059e3874-fa20-4af9-af24-8d26823840d9'
         };
@@ -129,8 +217,8 @@
                     document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
                     document.querySelector('#DropSignsSongs').checked = config.DropSignsSongs !== false;
                     document.querySelector('#DropGarbageSubs').checked = config.DropGarbageSubs !== false;
-                    document.querySelector('#NotifyWebhookUrl').value = config.NotifyWebhookUrl || '';
                     document.querySelector('#MinFreeSpaceGb').value = (config.MinFreeSpaceGb !== undefined && config.MinFreeSpaceGb !== null) ? config.MinFreeSpaceGb : 10;
+                    document.querySelector('#NotifyWebhookUrl').value = config.NotifyWebhookUrl || '';
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -160,9 +248,9 @@
                     config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
                     config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
                     config.DropGarbageSubs = document.querySelector('#DropGarbageSubs').checked;
-                    config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();
                     var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
                     config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
+                    config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });

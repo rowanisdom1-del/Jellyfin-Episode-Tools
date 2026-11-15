@@ -8,6 +8,54 @@
 <div id="EpisodeToolsShowsPage" data-role="page" class="page type-interior">
     <div data-role="content">
         <div class="content-primary">
+<style>
+        .epTools-nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 0 0 1.2em 0;
+        }
+        .epTools-nav a {
+            padding: 8px 16px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.06);
+            color: inherit;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .epTools-nav a.active {
+            background: #00a4dc;
+            color: #fff;
+        }
+        .epTools-nav a:hover {
+            background: rgba(255,255,255,0.12);
+        }
+    </style>
+            <div class="epTools-nav" id="epToolsNav"></div>
+            <script type="text/javascript">
+                (function () {
+                    var pages = [
+                        ['Settings', 'Episode Tools'],
+                        ['Shows', 'Episode Tools Shows'],
+                        ['Report', 'Episode Tools Report'],
+                        ['Sub Check', 'Episode Tools Sub Check'],
+                        ['Audit', 'Episode Tools Audit']
+                    ];
+                    var title = (document.title || '').toLowerCase();
+                    var nav = document.getElementById('epToolsNav');
+                    pages.forEach(function (p) {
+                        var a = document.createElement('a');
+                        a.textContent = p[0];
+                        a.href = '#';
+                        if (title === p[1].toLowerCase()) { a.className = 'active'; }
+                        a.addEventListener('click', function (e) {
+                            e.preventDefault();
+                            Dashboard.navigate('configurationpage?name=' + encodeURIComponent(p[1]));
+                        });
+                        nav.appendChild(a);
+                    });
+                })();
+            </script>
             <h2>Episode Tools — Shows</h2>
             <p>Every show found in your series/scan folders. Choose the <b>default subtitle language</b> and
             <b>default audio language</b> per show. These apply the next time that show is converted:
