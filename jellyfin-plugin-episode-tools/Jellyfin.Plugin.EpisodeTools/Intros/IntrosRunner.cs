@@ -278,14 +278,14 @@ internal static class IntrosRunner
             {
                 for (var k = i + 1; k < queue.Count; k++)
                 {
-                    var (lhs, rhs) = CompareEpisodes(queue[i].Points!, queue[k].Points!, minDuration, maxDuration);
-                    if (lhs is null)
+                    var match = CompareEpisodes(queue[i].Points!, queue[k].Points!, minDuration, maxDuration);
+                    if (match is null)
                     {
                         continue;
                     }
 
-                    SaveBetter(bounds, queue[i].Path, lhs.Value);
-                    SaveBetter(bounds, queue[k].Path, rhs!.Value);
+                    SaveBetter(bounds, queue[i].Path, match.Value.Item1, match.Value.Item2);
+                    SaveBetter(bounds, queue[k].Path, match.Value.Item1, match.Value.Item2);
                 }
             }
 
@@ -341,15 +341,16 @@ internal static class IntrosRunner
     private static void SaveBetter(
         Dictionary<string, (double Start, double End)> bounds,
         string path,
-        (double Start, double End) candidate)
+        double start,
+        double end)
     {
-        var duration = candidate.End - candidate.Start;
+        var duration = end - start;
         if (bounds.TryGetValue(path, out var existing) && existing.End - existing.Start >= duration)
         {
             return;
         }
 
-        bounds[path] = candidate;
+        bounds[path] = (start, end);
     }
 
     private static List<Job> EnumerateJobs(PluginConfiguration cfg)

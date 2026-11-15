@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Jellyfin.Plugin.EpisodeTools.Intros;
 
 namespace Jellyfin.Plugin.EpisodeTools;
 
@@ -371,9 +372,9 @@ public class EpisodeToolsReportController : ControllerBase
     public IActionResult IntrosStatus()
     {
         var results = IntrosRunner.LoadResults();
-        var resultsFile = Path.Combine(Plugin.Instance?.WorkFolder ?? ".", "intros.json");
-        var scannedAt = File.Exists(resultsFile)
-            ? File.GetLastWriteTimeUtc(resultsFile)
+        var resultsFile = System.IO.Path.Combine(Plugin.Instance?.WorkFolder ?? ".", "intros.json");
+        var scannedAt = System.IO.File.Exists(resultsFile)
+            ? System.IO.File.GetLastWriteTimeUtc(resultsFile)
             : (DateTime?)null;
 
         var payload = new
