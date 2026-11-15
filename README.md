@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" width="128" alt="Episode Tools logo" />
+</p>
+
 # Episode Tools (Jellyfin 12 plugin)
 
 A Jellyfin plugin that keeps an anime/series library tidy: it renames episodes, losslessly
