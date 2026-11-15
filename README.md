@@ -68,15 +68,15 @@ Any push builds the plugin automatically (`.github/workflows/build.yml`) and kee
 as an artifact. To publish a release, push a tag:
 
 ```bash
-git tag v3.0.0 && git push origin v3.0.0
+git tag v3.0.1 && git push origin v3.0.1
 ```
 
-The workflow attaches `EpisodeTools_3.0.0.0.zip` to the release. Download from the
+The workflow attaches `EpisodeTools_3.0.1.0.zip` to the release. Download from the
 [Releases page](../../releases).
 
 ## Install
 
-**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.0.0.0/`
+**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.0.1.0/`
 (the DLL must sit directly in that folder) and restart the container. The container needs
 `python3` for the rename/audit tasks — the official Jellyfin image has ffmpeg bundled.
 
@@ -84,10 +84,10 @@ The workflow attaches `EpisodeTools_3.0.0.0.zip` to the release. Download from t
 
 ```bash
 sudo apt install unzip acl
-wget https://github.com/<your-user>/<your-repo>/releases/download/v3.0.0/EpisodeTools_3.0.0.0.zip
-sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.0.0.0
-sudo unzip -o EpisodeTools_3.0.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.0.0.0
-sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.0.0.0
+wget https://github.com/<your-user>/<your-repo>/releases/download/v3.0.1/EpisodeTools_3.0.1.0.zip
+sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.0.1.0
+sudo unzip -o EpisodeTools_3.0.1.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.0.1.0
+sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.0.1.0
 sudo setfacl -R -m u:jellyfin:rwX /mnt/storage/media
 sudo setfacl -R -d -m u:jellyfin:rwX /mnt/storage/media
 sudo systemctl restart jellyfin
@@ -134,6 +134,10 @@ Intro Skipper, which covers every media segment type. If you run both plugins, d
 of the two intro scanners to avoid duplicate skip buttons.
 
 ## Version history
+
+- **3.0.1** — intro scan: skip re-walking folders that are an ancestor/descendant of another
+  configured folder (e.g. listing both `/media/Series` and `/media/` used to cross-compare
+  the same tree against itself as one giant group, stalling the scan for hours).
 
 - **3.0.0** — intro scanner production hardening: recursive episode enumeration (episodes in
   season subfolders are now found), ffmpeg resolution via `JELLYFIN_FFMPEG` (fixes Docker

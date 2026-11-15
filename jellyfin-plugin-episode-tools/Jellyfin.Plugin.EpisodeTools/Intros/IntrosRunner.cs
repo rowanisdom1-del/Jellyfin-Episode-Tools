@@ -427,6 +427,7 @@ internal static class IntrosRunner
 
         var jobs = new List<Job>();
         var seenShows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenShowDirs = new List<string>();
         var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var options = new EnumerationOptions
         {
@@ -446,6 +447,26 @@ internal static class IntrosRunner
             {
                 var show = Path.GetFileName(showDir);
                 if (seenShows.Contains(show))
+                {
+                    continue;
+                }
+
+                // Skip folders that are an ancestor or descendant of one we already scanned
+                // (e.g. when the config lists both "/media/Series" and "/media/"), otherwise
+                // the same tree is compared against itself as one giant group.
+                var dirWithSep = showDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                var covered = false;
+                foreach (var seen in seenShows)
+                {
+                    if (seen.StartsWith(dirWithSep, StringComparison.OrdinalIgnoreCase) ||
+                        dirWithSep.StartsWith(seen, StringComparison.OrdinalIgnoreCase))
+                    {
+                        covered = true;
+                        break;
+                    }
+                }
+
+                if (covered)
                 {
                     continue;
                 }
@@ -472,6 +493,7 @@ internal static class IntrosRunner
                 }
 
                 seenShows.Add(show);
+                seenShowDirs.Add(dirWithSep);
             }
         }
 
