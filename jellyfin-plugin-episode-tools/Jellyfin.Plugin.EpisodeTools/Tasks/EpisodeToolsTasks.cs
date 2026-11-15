@@ -191,7 +191,7 @@ public sealed class SubCheckTask : IScheduledTask
         // Re-check every 3 days; new episodes added in between get caught automatically.
         return new[]
         {
-            new TaskTriggerInfo { Type = "IntervalTrigger", IntervalTicks = TimeSpan.FromDays(3).Ticks }
+            new TaskTriggerInfo { Type = TaskTriggerInfoType.IntervalTrigger, IntervalTicks = TimeSpan.FromDays(3).Ticks }
         };
     }
 }
