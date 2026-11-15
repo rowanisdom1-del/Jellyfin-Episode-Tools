@@ -98,6 +98,7 @@ sudo systemctl restart jellyfin
 
 ## Version history
 
+- **2.2.0** — per-show convert button, page filters, notify webhook, duplicate resolver, audio fallback, garbage subtitle drop.
 - **2.0.1** — subtitle filter fallback fix, .ass parser fix, verify isolation, audit root-file fix.
 - **2.0.0** — library audit (duplicates + largest files), minimum-free-space guard, sub
   check auto-schedule, fixed signs/songs filter matching "subtitles", fixed .ass parsing,
