@@ -381,6 +381,13 @@ internal static class IntrosRunner
                 }
 
                 var end = AdjustEndToSilence(job.Path, b.Start, b.End, logger, ct);
+                if (end - b.Start < minDuration)
+                {
+                    // The snap shrank the intro below the configured minimum (quiet audio
+                    // near the start); keep the fingerprinted end instead.
+                    end = b.End;
+                }
+
                 found[job.Path] = new IntroResult
                 {
                     File = job.Path,
@@ -928,6 +935,12 @@ internal static class IntrosRunner
             var raw = Encoding.UTF8.GetString(RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false).GetAwaiter().GetResult());
             var originalEnd = new TimeRange(introEnd - 15, introEnd);
 
+            // Among the silences that intersect the end of the matched intro, pick the one
+            // that starts CLOSEST to the matched end. Taking the first (earliest) silence
+            // instead used to chop intros down to a couple of seconds whenever quiet audio
+            // (a cold open, low-volume dialogue) appears near the start.
+            double bestStart = double.MinValue;
+            var found = false;
             double start = double.MinValue, end = double.MinValue;
             var hasStart = false;
             foreach (Match match in SilenceRegex.Matches(raw))
@@ -945,11 +958,18 @@ internal static class IntrosRunner
                     var candidate = new TimeRange(start, end);
                     if (originalEnd.Intersects(candidate) &&
                         candidate.Duration >= 0.33 &&
-                        candidate.Start >= introStart)
+                        candidate.Start >= introStart &&
+                        candidate.Start > bestStart)
                     {
-                        return candidate.Start;
+                        bestStart = candidate.Start;
+                        found = true;
                     }
                 }
+            }
+
+            if (found)
+            {
+                return bestStart;
             }
         }
         catch (OperationCanceledException)
