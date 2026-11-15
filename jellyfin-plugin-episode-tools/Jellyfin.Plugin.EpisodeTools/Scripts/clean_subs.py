@@ -129,7 +129,7 @@ def main(argv):
             result = subprocess.run(
                 [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
                  "-i", source, "-map", f"0:{index}", "-f", "ass", ass_path],
-                capture_output=True, timeout=300)
+                capture_output=True, timeout=90)
             if result.returncode != 0 or not os.path.exists(ass_path):
                 continue
 

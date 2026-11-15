@@ -598,7 +598,11 @@ if $DROP_GARBAGE_SUBS && command -v python3 >/dev/null 2>&1 && (( ${#SUB_INDICES
   kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
   dropped=""
   for i in "${!SUB_INDICES[@]}"; do
-    if ffmpeg -v error -y -i "$src" -map "0:s:$i" -f srt "$garbage_tmp" 2>/dev/null; then
+    # timeout: pathological ASS tracks (one cue per letter) can make ffmpeg's SRT
+    # encoder spin for ever; on timeout/ failure the track is simply kept.
+    # ${SUB_INDICES[$i]} is the real stream index - "0:s:$i" would probe the wrong
+    # track whenever an earlier subtitle was filtered out by preferences.
+    if timeout 60 ffmpeg -v error -y -i "$src" -map "0:${SUB_INDICES[$i]}" -f srt "$garbage_tmp" 2>/dev/null; then
       ratio=$(python3 - "$garbage_tmp" <<'PYEOF'
 import re, sys
 try:
