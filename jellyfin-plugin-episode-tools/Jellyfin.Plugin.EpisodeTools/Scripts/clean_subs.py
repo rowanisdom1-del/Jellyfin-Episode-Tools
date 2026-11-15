@@ -123,7 +123,7 @@ def main(argv):
             continue
         try:
             with tempfile.NamedTemporaryFile(
-                    suffix=".ass", dir=out_dir, delete=False, encoding="utf-8") as tmp:
+                    suffix=".ass", dir=out_dir, delete=False, mode="w", encoding="utf-8") as tmp:
                 ass_path = tmp.name
 
             result = subprocess.run(
