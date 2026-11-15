@@ -816,6 +816,7 @@
                                     <p class="epPageLead">Skippable openings found by the fast intro scanner. It fingerprints only the first few minutes of each episode (the official scanner fingerprints whole episodes), decodes several episodes at once and caches per file, so re-scans only touch new or changed episodes.</p>
                                 </div>
                                 <button type="button" id="IntrosScanBtn" class="raised button-submit epRefreshBtn">Scan now</button>
+                                <button type="button" id="IntrosStopBtn" class="raised button-mini epRefreshBtn">Stop</button>
                                 <button type="button" class="raised button-mini epRefreshBtn" data-refresh="intros">Refresh</button>
                             </div>
                             <div id="IntrosScanStatus" class="epStatusCard">
@@ -1582,6 +1583,18 @@
                     .then(function () {
                         btn.disabled = false;
                         if (!introsTimer) { introsTimer = setInterval(pollIntros, 2000); }
+                        pollIntros();
+                    }).catch(function () {
+                        btn.disabled = false;
+                    });
+            });
+
+            document.querySelector('#IntrosStopBtn').addEventListener('click', function () {
+                var btn = this;
+                btn.disabled = true;
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('EpisodeTools/IntrosStop'), dataType: 'text' })
+                    .then(function () {
+                        btn.disabled = false;
                         pollIntros();
                     }).catch(function () {
                         btn.disabled = false;

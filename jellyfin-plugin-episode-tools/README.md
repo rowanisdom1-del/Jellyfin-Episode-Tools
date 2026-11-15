@@ -32,7 +32,7 @@ a left sidebar of tabs, a settings search box, and a sticky Save bar.
 | **Shows** | Every show with episode counts, .mkv-to-convert count and subtitle languages found — plus **per-show default subtitle and audio language** dropdowns, applied at the next conversion |
 | **Report** | Every .mkv that could not be converted, and exactly why |
 | **Sub Check** | Subtitle problems per episode: default track is a signs/songs/lyrics track, lyrics-heavy content, ultra-short cues |
-| **Intros** | Skippable openings found by the fast intro scanner, with a Scan now button and live progress |
+| **Intros** | Skippable openings found by the fast intro scanner: Scan now / Stop, live progress and a per-season results table that fills in as the scan runs |
 | **Audit** | Duplicate episodes and the largest files, grouped and readable |
 
 ## How conversions work
@@ -64,15 +64,15 @@ Any push builds the plugin automatically (`.github/workflows/build.yml`) and kee
 as an artifact. To publish a release, push a tag:
 
 ```bash
-git tag v2.0.0 && git push origin v2.0.0
+git tag v3.0.0 && git push origin v3.0.0
 ```
 
-The workflow attaches `EpisodeTools_2.0.1.0.zip` to the release. Download from the
+The workflow attaches `EpisodeTools_3.0.0.0.zip` to the release. Download from the
 [Releases page](../../releases).
 
 ## Install
 
-**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_2.0.1.0/`
+**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.0.0.0/`
 (the DLL must sit directly in that folder) and restart the container. The container needs
 `python3` for the rename/audit tasks — the official Jellyfin image has ffmpeg bundled.
 
@@ -80,10 +80,10 @@ The workflow attaches `EpisodeTools_2.0.1.0.zip` to the release. Download from t
 
 ```bash
 sudo apt install unzip acl
-wget https://github.com/<your-user>/<your-repo>/releases/download/v2.0.1/EpisodeTools_2.0.1.0.zip
-sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_2.0.1.0
-sudo unzip -o EpisodeTools_2.0.1.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_2.0.1.0
-sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_2.0.1.0
+wget https://github.com/<your-user>/<your-repo>/releases/download/v3.0.0/EpisodeTools_3.0.0.0.zip
+sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.0.0.0
+sudo unzip -o EpisodeTools_3.0.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.0.0.0
+sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.0.0.0
 sudo setfacl -R -m u:jellyfin:rwX /mnt/storage/media
 sudo setfacl -R -d -m u:jellyfin:rwX /mnt/storage/media
 sudo systemctl restart jellyfin
@@ -111,10 +111,13 @@ Why it is faster than the official Intro Skipper:
 - **Only the start of the file is fingerprinted** — intros always live in the first few
   minutes, so the default window is 4 minutes instead of the whole episode (a 24-minute
   episode means ~6x less audio to decode; 50-minute files ~12x).
-- **Parallel decoding** — several episodes are fingerprinted at the same time (default 2
-  ffmpeg processes, configurable).
+- **Parallel decoding** — several episodes are fingerprinted at the same time (default 2,
+  up to 8 ffmpeg processes).
 - **Per-file cache** — fingerprints are stored keyed on size + mtime + window, so re-scans
-  only decode new or changed episodes.
+  only decode new or changed episodes, and a scan that is interrupted (power cut, restart)
+  resumes where it left off. Entries for deleted episodes are pruned automatically.
+- **Incremental results** — seasons are compared one at a time and results are saved after
+  each season, so intros appear in the Intros tab while the scan is still running.
 - The matching itself is the proven chromaprint algorithm (inverted-index search + contiguous
   range finding, like the official plugin), ending with the same silence-snap of the intro's
   end timestamp.
@@ -124,6 +127,13 @@ If the official Intro Skipper plugin is installed too, disable one of the scanne
 duplicate skip buttons.
 
 ## Version history
+
+- **3.0.0** — intro scanner production hardening: recursive episode enumeration (episodes in
+  season subfolders are now found), ffmpeg resolution via `JELLYFIN_FFMPEG` (fixes Docker
+  installs where ffmpeg is not on PATH), per-season incremental results, working Stop button
+  and endpoint, fingerprint-cache pruning for deleted episodes, cached results parsing, and
+  safer task cancellation. Bumped to 3.0.0 because the intro engine plus the 2.5 changes are
+  a full feature overhaul.
 
 - **2.5.0** — fast intro scanner: windowed chromaprint fingerprinting (first few minutes
   only), parallel decoding, per-file cache; results served as standard media segments

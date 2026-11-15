@@ -46,23 +46,32 @@ public sealed class ScanIntrosTask : IScheduledTask
         }
 
         // The runner reports its own progress through the status endpoint; wait until it stops.
-        return Task.Run(async () =>
-        {
-            while (IntrosRunner.Running)
+        return Task.Run(
+            async () =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (cancellationToken.IsCancellationRequested)
+                try
                 {
-                    IntrosRunner.Stop();
-                    return;
+                    while (IntrosRunner.Running)
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            IntrosRunner.Stop();
+                            progress.Report(100);
+                            return;
+                        }
+
+                        progress.Report(IntrosRunner.LastProgress);
+                        await Task.Delay(1000, CancellationToken.None).ConfigureAwait(false);
+                    }
+
+                    progress.Report(100);
                 }
-
-                progress.Report(IntrosRunner.LastProgress);
-                await Task.Delay(1000, CancellationToken.None).ConfigureAwait(false);
-            }
-
-            progress.Report(100);
-        }, CancellationToken.None);
+                catch (Exception)
+                {
+                    // Never let a polling error fail the task; the runner keeps its own state.
+                }
+            },
+            CancellationToken.None);
     }
 
     /// <inheritdoc />

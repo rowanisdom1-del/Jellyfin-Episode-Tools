@@ -148,6 +148,8 @@ internal static class IntrosRunner
     private static string ResultsPath =>
         Path.Combine(Plugin.Instance?.WorkFolder ?? ".", "intros.json");
 
+    private static (long Length, DateTime Modified, IReadOnlyList<IntroResult> Results)? _resultsCache;
+
     /// <summary>True when the results file holds an intro for exactly this path.</summary>
     public static bool HasIntro(string path)
     {
@@ -163,7 +165,11 @@ internal static class IntrosRunner
         return false;
     }
 
-    /// <summary>Loads the latest results (empty list when nothing was scanned yet).</summary>
+    /// <summary>
+    /// Loads the latest results (empty list when nothing was scanned yet). The file is only
+    /// re-parsed when its timestamp or size changes, since this is called per episode while
+    /// the media segment task runs and per poll while the dashboard is open.
+    /// </summary>
     public static IReadOnlyList<IntroResult> LoadResults()
     {
         try
@@ -174,6 +180,13 @@ internal static class IntrosRunner
                 return Array.Empty<IntroResult>();
             }
 
+            var info = new FileInfo(file);
+            var key = (info.Length, info.LastWriteTimeUtc);
+            if (_resultsCache is { } cached && cached.Length == key.Length && cached.Modified == key.Modified)
+            {
+                return cached.Results;
+            }
+
             var json = File.ReadAllText(file);
             var state = System.Text.Json.JsonSerializer.Deserialize<IntrosState>(
                 json,
@@ -181,7 +194,9 @@ internal static class IntrosRunner
                 {
                     PropertyNameCaseInsensitive = true
                 });
-            return state?.Intros ?? new List<IntroResult>();
+            IReadOnlyList<IntroResult> results = state?.Intros ?? new List<IntroResult>();
+            _resultsCache = (key.Length, key.Modified, results);
+            return results;
         }
         catch (Exception)
         {
@@ -377,6 +392,7 @@ internal static class IntrosRunner
         }
 
         WriteState();
+        PruneCache(cacheDir, jobs);
 
         var results2 = found.Values.OrderBy(r => r.Show, StringComparer.OrdinalIgnoreCase).ToList();
         _lastMessage = $"finished: {results2.Count} intro(s) in {jobs.Count} episode(s)";
@@ -533,6 +549,7 @@ internal static class IntrosRunner
 
             var payload = System.Text.Json.JsonSerializer.Serialize(new
             {
+                path = job.Path,
                 size = info.Length,
                 mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds,
                 points = Convert.ToBase64String(bytes)
@@ -542,6 +559,51 @@ internal static class IntrosRunner
         catch (Exception)
         {
             // Caching is best effort.
+        }
+    }
+
+    /// <summary>
+    /// Deletes cache entries for files that no longer exist under the configured folders
+    /// (deleted or renamed episodes), so the cache does not grow forever.
+    /// </summary>
+    private static void PruneCache(string cacheDir, List<Job> jobs)
+    {
+        try
+        {
+            var live = new HashSet<string>(
+                jobs.Select(j => j.Path),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var cacheFile in Directory.EnumerateFiles(cacheDir, "*.json"))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cacheFile));
+                    var cachedPath = doc.RootElement.TryGetProperty("path", out var p)
+                        ? p.GetString()
+                        : null;
+                    if (cachedPath is null || !live.Contains(cachedPath))
+                    {
+                        File.Delete(cacheFile);
+                    }
+                }
+                catch (Exception)
+                {
+                    // Corrupt entry: drop it so a fresh fingerprint replaces it.
+                    try
+                    {
+                        File.Delete(cacheFile);
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore; it will be retried on the next scan.
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Pruning is best effort.
         }
     }
 
@@ -664,14 +726,16 @@ internal static class IntrosRunner
 
         process.Start();
 
-        var output = new MemoryStream();
-        var buffer = new byte[8192];
-        var stream = stderr ? process.StandardError : process.StandardOutput;
         if (stderr)
         {
             var text = await process.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
             return Encoding.UTF8.GetBytes(text);
         }
+
+        var output = new MemoryStream();
+        var buffer = new byte[8192];
+        var stream = process.StandardOutput;
 
         while (true)
         {
@@ -717,7 +781,7 @@ internal static class IntrosRunner
 
         if (end - start > maxIntroDuration)
         {
-            // Keep only the tail end of an over-long match; intros are short.
+            // An over-long shared stretch is not an intro (e.g. whole episodes that match).
             return null;
         }
 
