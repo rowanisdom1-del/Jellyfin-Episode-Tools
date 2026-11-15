@@ -430,6 +430,7 @@ internal static class IntrosRunner
                     videos.Count);
 
                 foreach (var file in videos)
+                {
                     var name = Path.GetFileName(file);
                     var m = SeasonRegex.Match(name);
                     var season = m.Success ? $"S{int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture):00}" : "S?";
