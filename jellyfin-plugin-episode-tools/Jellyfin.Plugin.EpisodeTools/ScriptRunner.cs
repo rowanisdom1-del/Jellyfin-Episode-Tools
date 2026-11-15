@@ -48,7 +48,7 @@ internal static class ScriptRunner
     /// Runs the MKV to MP4 script over every configured scan folder. Without <paramref name="apply"/>
     /// it only lists what would be converted. With <paramref name="redo"/> it also re-converts files
     /// whose .mp4 already exists, replacing it after verification. With <paramref name="folderOverride"/>
-    /// only that single folder is scanned (per-show conversion from the Shows page).
+    /// only that single folder is scanned (per-show conversion from the Shows tab).
     /// </summary>
     public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null)
     {

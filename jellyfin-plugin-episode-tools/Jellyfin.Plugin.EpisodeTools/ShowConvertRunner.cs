@@ -6,8 +6,8 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.EpisodeTools;
 
 /// <summary>
-/// Runs one convert-at-a-time conversion of a single show folder, triggered from the Shows page.
-/// Only one background run exists at any time; the Shows page polls the status.
+/// Runs one convert-at-a-time conversion of a single show folder, triggered from the Shows tab.
+/// Only one background run exists at any time; the Shows tab polls the status.
 /// </summary>
 internal static class ShowConvertRunner
 {

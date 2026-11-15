@@ -21,15 +21,16 @@ with a Run button:
 
 ## Dashboard pages
 
-Under **Dashboard > Plugins > Episode Tools**:
+One plugin page under **Dashboard > Plugins** (next to the other plugins), Moonbase-style:
+a left sidebar of tabs, a settings search box, and a sticky Save bar.
 
-| Page | What you get |
+| Tab | What you get |
 |---|---|
-| **Episode Tools** (settings) | Up to 5 rename folders, up to 5 scan folders, delete-originals, audio-to-AAC, faststart (off = ~2x faster conversion), drop signs/songs tracks, minimum free space guard |
-| **Episode Tools Shows** | Every show with episode counts, .mkv-to-convert count and subtitle languages found — plus **per-show default subtitle and audio language** dropdowns, applied at the next conversion |
-| **Episode Tools Report** | Every .mkv that could not be converted, and exactly why |
-| **Episode Tools Sub Check** | Subtitle problems per episode: default track is a signs/songs/lyrics track, lyrics-heavy content, ultra-short cues |
-| **Episode Tools Audit** | Duplicate episodes and the largest files, grouped and readable |
+| **Settings** | Up to 5 rename folders, up to 5 scan folders, delete-originals, audio-to-AAC, faststart (off = ~2x faster conversion), drop signs/songs tracks, minimum free space guard |
+| **Shows** | Every show with episode counts, .mkv-to-convert count and subtitle languages found — plus **per-show default subtitle and audio language** dropdowns, applied at the next conversion |
+| **Report** | Every .mkv that could not be converted, and exactly why |
+| **Sub Check** | Subtitle problems per episode: default track is a signs/songs/lyrics track, lyrics-heavy content, ultra-short cues |
+| **Audit** | Duplicate episodes and the largest files, grouped and readable |
 
 ## How conversions work
 
@@ -98,6 +99,9 @@ sudo systemctl restart jellyfin
 
 ## Version history
 
+- **2.4.0** — one Moonbase-style settings page (sidebar tabs, search, iOS toggles) in the
+  Plugins section of the Dashboard sidebar; fixes the Shows page (audio-fallback dropdown
+  never rendered) and the unreachable Sub Check page.
 - **2.3.0** — dashboard sidebar entry with icon, navigation tabs on every page, card-style settings page.
 - **2.2.0** — per-show convert button, page filters, notify webhook, duplicate resolver, audio fallback, garbage subtitle drop.
 - **2.0.1** — subtitle filter fallback fix, .ass parser fix, verify isolation, audit root-file fix.

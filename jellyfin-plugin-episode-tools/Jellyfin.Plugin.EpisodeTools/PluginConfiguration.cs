@@ -72,7 +72,7 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
-    /// Per-show track preferences, edited on the Episode Tools Shows page. SubtitleLanguage is
+    /// Per-show track preferences, edited on the Episode Tools Shows tab. SubtitleLanguage is
     /// "" (keep all), "none" (drop subtitles) or a language code. AudioLanguage is "" (keep all)
     /// or a language code; matching audio is kept and flagged as default, with a safety fallback
     /// that never removes every audio track.

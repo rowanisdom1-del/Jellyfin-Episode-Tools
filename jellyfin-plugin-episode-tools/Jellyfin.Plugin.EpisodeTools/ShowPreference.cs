@@ -1,7 +1,7 @@
 namespace Jellyfin.Plugin.EpisodeTools;
 
 /// <summary>
-/// Per-show subtitle and audio defaults. Edited on the Episode Tools Shows page; applied by the
+/// Per-show subtitle and audio defaults. Edited on the Episode Tools Shows tab; applied by the
 /// convert script the next time that show is converted.
 /// </summary>
 public class ShowPreference

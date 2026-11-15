@@ -50,44 +50,17 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
-        // MenuSection "server" puts the entry in the Dashboard sidebar under Plugins.
+        // A single page like Moonbase: no MenuSection, so the entry lands in the Dashboard
+        // sidebar's Plugins group next to the other plugins, and everything is one tabbed page.
         yield return new PluginPageInfo
         {
             Name = Name,
             DisplayName = "Episode Tools",
-            EnableInMainMenu = false,
-            MenuSection = "server",
-            MenuIcon = "build",
+            EnableInMainMenu = true,
+            MenuIcon = "movie",
             EmbeddedResourcePath = string.Format(
                 CultureInfo.InvariantCulture,
                 "{0}.Configuration.configPage.html",
-                GetType().Namespace)
-        };
-        yield return new PluginPageInfo
-        {
-            Name = "Episode Tools Report",
-            DisplayName = "Episode Tools Report",
-            EmbeddedResourcePath = string.Format(
-                CultureInfo.InvariantCulture,
-                "{0}.Configuration.reportPage.html",
-                GetType().Namespace)
-        };
-        yield return new PluginPageInfo
-        {
-            Name = "Episode Tools Shows",
-            DisplayName = "Episode Tools Shows",
-            EmbeddedResourcePath = string.Format(
-                CultureInfo.InvariantCulture,
-                "{0}.Configuration.showsPage.html",
-                GetType().Namespace)
-        };
-        yield return new PluginPageInfo
-        {
-            Name = "Episode Tools Audit",
-            DisplayName = "Episode Tools Audit",
-            EmbeddedResourcePath = string.Format(
-                CultureInfo.InvariantCulture,
-                "{0}.Configuration.auditPage.html",
                 GetType().Namespace)
         };
     }

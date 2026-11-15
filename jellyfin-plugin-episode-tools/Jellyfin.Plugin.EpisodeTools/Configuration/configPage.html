@@ -3,207 +3,813 @@
 <head>
     <meta charset="utf-8">
     <title>Episode Tools</title>
-    <style>
-        .epTools-nav {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin: 0 0 1.2em 0;
-        }
-        .epTools-nav a {
-            padding: 8px 16px;
-            border-radius: 6px;
-            background: rgba(255,255,255,0.06);
-            color: inherit;
-            text-decoration: none;
-            font-weight: 500;
-        }
-        .epTools-nav a.active {
-            background: #00a4dc;
-            color: #fff;
-        }
-        .epTools-nav a:hover {
-            background: rgba(255,255,255,0.12);
-        }
-        .epTools-card {
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 10px;
-            padding: 1em 1.4em 1.4em 1.4em;
-            margin-bottom: 1.2em;
-        }
-        .epTools-card h3 {
-            margin: 0.2em 0 0.6em 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: #00a4dc;
-        }
-        .epTools-card .epTools-desc {
-            margin: 0.4em 0 0.9em 0;
-        }
-    </style>
 </head>
 <body>
 <div id="EpisodeToolsConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
     <div data-role="content">
         <div class="content-primary">
-            <h2>Episode Tools</h2>
-            <div class="epTools-nav" id="epToolsNav"></div>
-            <p>The tasks are under Dashboard &gt; Scheduled Tasks &gt; Episode Tools. The output of each run is in Dashboard &gt; Logs. Per-show subtitle/audio defaults are on the <b>Shows</b> page; convert problems are on the <b>Report</b> page.</p>
+            <style>
+                #EpisodeToolsConfigPage #EpisodeToolsConfigForm {
+                    max-width: none;
+                }
+
+                #EpisodeToolsConfigPage .epAdminShell {
+                    display: flex;
+                    gap: 18px;
+                    align-items: flex-start;
+                    margin-top: 1em;
+                }
+
+                #EpisodeToolsConfigPage .epAdminNav {
+                    flex: 0 0 280px;
+                    position: sticky;
+                    top: 0.5em;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    padding: 14px 12px;
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 14px;
+                    background: rgba(255, 255, 255, 0.02);
+                }
+
+                #EpisodeToolsConfigPage .epNavBrand {
+                    display: flex;
+                    align-items: center;
+                    gap: 11px;
+                    padding: 6px 8px 16px;
+                }
+
+                #EpisodeToolsConfigPage .epNavLogo {
+                    box-sizing: border-box;
+                    width: 36px;
+                    height: 36px;
+                    flex-shrink: 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    border-radius: 10px;
+                    background: linear-gradient(135deg, rgba(0, 164, 220, 0.85), rgba(124, 58, 237, 0.85));
+                    color: #fff;
+                    font-size: 20px;
+                }
+
+                #EpisodeToolsConfigPage .epNavBrandText {
+                    font-size: 1.2em;
+                    font-weight: 600;
+                    color: #f0f6fc;
+                }
+
+                #EpisodeToolsConfigPage .epNavItem {
+                    display: flex;
+                    align-items: center;
+                    gap: 13px;
+                    width: 100%;
+                    text-align: left;
+                    border: 0;
+                    background: transparent;
+                    color: inherit;
+                    border-radius: 10px;
+                    padding: 11px 12px;
+                    cursor: pointer;
+                    box-shadow: inset 2px 0 0 transparent;
+                    transition: background 0.15s ease;
+                }
+
+                #EpisodeToolsConfigPage .epNavItem:hover {
+                    background: rgba(255, 255, 255, 0.05);
+                }
+
+                #EpisodeToolsConfigPage .epNavItem.is-active {
+                    background: rgba(0, 164, 220, 0.14);
+                    box-shadow: inset 2px 0 0 #00a4dc;
+                }
+
+                #EpisodeToolsConfigPage .epNavIcon {
+                    font-size: 23px;
+                    color: rgba(255, 255, 255, 0.6);
+                    flex-shrink: 0;
+                }
+
+                #EpisodeToolsConfigPage .epNavItem.is-active .epNavIcon {
+                    color: #37d3e6;
+                }
+
+                #EpisodeToolsConfigPage .epNavText {
+                    display: flex;
+                    flex-direction: column;
+                    min-width: 0;
+                }
+
+                #EpisodeToolsConfigPage .epNavLabel {
+                    font-size: 1.02em;
+                    color: rgba(255, 255, 255, 0.86);
+                    line-height: 1.3;
+                }
+
+                #EpisodeToolsConfigPage .epNavItem.is-active .epNavLabel {
+                    color: #f0f6fc;
+                }
+
+                #EpisodeToolsConfigPage .epNavSub {
+                    font-size: 0.82em;
+                    color: rgba(255, 255, 255, 0.4);
+                    line-height: 1.2;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+
+                #EpisodeToolsConfigPage .epAdminMain {
+                    flex: 1 1 auto;
+                    min-width: 0;
+                }
+
+                #EpisodeToolsConfigPage .epSearch {
+                    position: relative;
+                    margin-bottom: 16px;
+                }
+
+                #EpisodeToolsConfigPage .epSearch .material-icons {
+                    position: absolute;
+                    left: 11px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    font-size: 18px;
+                    color: rgba(255, 255, 255, 0.4);
+                    pointer-events: none;
+                }
+
+                #EpisodeToolsConfigPage .epSearchInput {
+                    box-sizing: border-box;
+                    width: 100%;
+                    height: 38px;
+                    padding: 0 12px 0 36px;
+                    border: 1px solid rgba(255, 255, 255, 0.14);
+                    border-radius: 10px;
+                    background: rgba(0, 0, 0, 0.2);
+                    color: inherit;
+                    font-size: 0.9em;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel {
+                    display: none;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel.is-active {
+                    display: block;
+                    animation: epFade 0.18s ease;
+                }
+
+                @keyframes epFade {
+                    from { opacity: 0; transform: translateY(4px); }
+                    to { opacity: 1; transform: none; }
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .verticalSection {
+                    margin: 0 0 16px;
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 16px;
+                    background: rgba(255, 255, 255, 0.02);
+                    padding: 4px 22px 20px;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .verticalSection > .sectionTitle {
+                    margin: 18px 0 14px;
+                    font-size: 1.12em;
+                    font-weight: 600;
+                    color: #f0f6fc;
+                }
+
+                #EpisodeToolsConfigPage .epPageHead {
+                    margin: 2px 2px 16px;
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 12px;
+                }
+
+                #EpisodeToolsConfigPage .epPageHeadText {
+                    flex: 1 1 auto;
+                    min-width: 0;
+                }
+
+                #EpisodeToolsConfigPage .epPageTitle {
+                    margin: 0 0 4px;
+                    font-size: 1.45em;
+                    font-weight: 600;
+                }
+
+                #EpisodeToolsConfigPage .epPageLead {
+                    margin: 0;
+                    line-height: 1.5;
+                    opacity: 0.72;
+                }
+
+                #EpisodeToolsConfigPage .epRefreshBtn {
+                    flex-shrink: 0;
+                    margin-top: 4px;
+                    border-radius: 8px;
+                }
+
+                #EpisodeToolsConfigPage .epSaveBar {
+                    position: sticky;
+                    bottom: 0;
+                    z-index: 5;
+                    display: flex;
+                    justify-content: flex-end;
+                    align-items: center;
+                    gap: 12px;
+                    margin-top: 18px;
+                    padding: 12px 14px;
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 12px;
+                    background: rgba(28, 28, 30, 0.92);
+                    -webkit-backdrop-filter: blur(8px);
+                    backdrop-filter: blur(8px);
+                }
+
+                #EpisodeToolsConfigPage .epSaveBar .button-submit {
+                    margin: 0;
+                    width: auto;
+                    border-radius: 8px;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .inputContainer input,
+                #EpisodeToolsConfigPage .epTabPanel .inputContainer textarea,
+                #EpisodeToolsConfigPage .epTabPanel .inputContainer select,
+                #EpisodeToolsConfigPage .epTabPanel .selectContainer select {
+                    max-width: 720px;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .emby-input,
+                #EpisodeToolsConfigPage .epTabPanel .emby-textarea,
+                #EpisodeToolsConfigPage .epTabPanel .emby-select {
+                    border-radius: 8px;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .raised {
+                    border-radius: 8px;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer > .emby-checkbox-label {
+                    justify-content: space-between;
+                    gap: 16px;
+                    height: auto;
+                    min-height: 2.35em;
+                    padding-left: 0;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer > .emby-checkbox-label > .checkboxOutline {
+                    position: relative;
+                    top: 0;
+                    flex-shrink: 0;
+                    width: 44px;
+                    height: 24px;
+                    border: 0;
+                    border-radius: 999px;
+                    background-color: rgba(255, 255, 255, 0.24);
+                    transition: background-color 0.15s ease;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer > .emby-checkbox-label > .checkboxOutline::after {
+                    content: '';
+                    position: absolute;
+                    top: 3px;
+                    left: 3px;
+                    width: 18px;
+                    height: 18px;
+                    border-radius: 50%;
+                    background: #fff;
+                    transition: transform 0.15s ease;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer > .emby-checkbox-label .checkboxIcon {
+                    display: none !important;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer .emby-checkbox:checked + span + .checkboxOutline {
+                    background-color: #00a4dc;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer .emby-checkbox:checked + span + .checkboxOutline::after {
+                    transform: translateX(20px);
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer .emby-checkbox:focus-visible + span + .checkboxOutline {
+                    outline: 2px solid #37d3e6;
+                    outline-offset: 2px;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .checkboxContainer .emby-checkbox[disabled] + span + .checkboxOutline {
+                    opacity: 0.5;
+                }
+
+                #EpisodeToolsConfigPage .epEyebrow {
+                    font-size: 0.8em;
+                    font-weight: 600;
+                    letter-spacing: 0.06em;
+                    text-transform: uppercase;
+                    opacity: 0.65;
+                }
+
+                #EpisodeToolsConfigPage .epChips {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }
+
+                #EpisodeToolsConfigPage .epChip {
+                    padding: 4px 12px;
+                    border: 1px solid rgba(0, 164, 220, 0.35);
+                    border-radius: 999px;
+                    background: rgba(0, 164, 220, 0.1);
+                    font-size: 0.85em;
+                }
+
+                #EpisodeToolsConfigPage .epStatusCard {
+                    display: none;
+                    align-items: center;
+                    gap: 16px;
+                    margin: 0 0 16px;
+                    padding: 16px 18px;
+                    border: 1px solid rgba(0, 164, 220, 0.35);
+                    border-radius: 14px;
+                    background: rgba(0, 164, 220, 0.08);
+                }
+
+                #EpisodeToolsConfigPage .epStatusCard.is-visible {
+                    display: flex;
+                }
+
+                #EpisodeToolsConfigPage .epStatusIcon {
+                    box-sizing: border-box;
+                    flex-shrink: 0;
+                    width: 44px;
+                    height: 44px;
+                    padding: 10px;
+                    border: 1px solid rgba(0, 164, 220, 0.42);
+                    border-radius: 12px;
+                    background: rgba(0, 164, 220, 0.16);
+                    color: #00a4dc;
+                    font-size: 22px;
+                    line-height: 22px;
+                    text-align: center;
+                }
+
+                #EpisodeToolsConfigPage .epStatusLines {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 3px;
+                    min-width: 0;
+                }
+
+                #EpisodeToolsConfigPage .epStatusTitle {
+                    font-size: 1.1em;
+                    font-weight: 600;
+                }
+
+                #EpisodeToolsConfigPage .epStatusState {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 0.9em;
+                    opacity: 0.75;
+                    word-break: break-all;
+                }
+
+                #EpisodeToolsConfigPage .epStatusDot {
+                    flex-shrink: 0;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 50%;
+                    background: #22c55e;
+                }
+
+                #EpisodeToolsConfigPage .epInfoLine {
+                    margin: 0 0 12px;
+                    line-height: 1.5;
+                    opacity: 0.75;
+                }
+
+                #EpisodeToolsConfigPage .epTabPanel .detailTable {
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 12px;
+                }
+
+                #EpisodeToolsConfigPage select.selectEpisodeTools {
+                    padding: 4px 8px;
+                    border: 1px solid rgba(255, 255, 255, 0.14);
+                    border-radius: 8px;
+                    background: rgba(0, 0, 0, 0.2);
+                    color: inherit;
+                    font-size: 0.9em;
+                    max-width: 180px;
+                }
+
+                #EpisodeToolsConfigPage button.button-mini {
+                    padding: 4px 12px;
+                    font-size: 0.85em;
+                }
+
+                #EpisodeToolsConfigPage.ep-searching .epTabPanel {
+                    display: block;
+                }
+
+                #EpisodeToolsConfigPage.ep-searching .epAdminNav {
+                    display: none;
+                }
+
+                #EpisodeToolsConfigPage .ep-hidden-by-search {
+                    display: none !important;
+                }
+
+                @media (max-width: 800px) {
+                    #EpisodeToolsConfigPage .epAdminShell {
+                        flex-direction: column;
+                    }
+
+                    #EpisodeToolsConfigPage .epAdminNav {
+                        flex: 0 0 auto;
+                        flex-direction: row;
+                        position: static;
+                        width: 100%;
+                        overflow-x: auto;
+                        gap: 6px;
+                    }
+
+                    #EpisodeToolsConfigPage .epNavBrand,
+                    #EpisodeToolsConfigPage .epNavSub {
+                        display: none;
+                    }
+
+                    #EpisodeToolsConfigPage .epNavItem {
+                        flex-direction: column;
+                        align-items: center;
+                        gap: 4px;
+                        min-width: 78px;
+                        box-shadow: none;
+                        text-align: center;
+                    }
+
+                    #EpisodeToolsConfigPage .epNavItem.is-active {
+                        box-shadow: inset 0 -2px 0 #00a4dc;
+                    }
+                }
+            </style>
 
             <form id="EpisodeToolsConfigForm">
-                <div class="epTools-card">
-                    <h3>📁 Folders</h3>
-                    <p class="epTools-desc">Rename folders must directly contain one sub folder per series (up to five). Scan folders are searched recursively for .mkv files (up to five).</p>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder1">Series folder 1 (for renaming)</label>
-                        <input id="RenameFolder1" name="RenameFolder1" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder2">Series folder 2 (optional)</label>
-                        <input id="RenameFolder2" name="RenameFolder2" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder3">Series folder 3 (optional)</label>
-                        <input id="RenameFolder3" name="RenameFolder3" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder4">Series folder 4 (optional)</label>
-                        <input id="RenameFolder4" name="RenameFolder4" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="RenameFolder5">Series folder 5 (optional)</label>
-                        <input id="RenameFolder5" name="RenameFolder5" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder1">Scan folder 1 (for converting .mkv to .mp4)</label>
-                        <input id="ScanFolder1" name="ScanFolder1" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder2">Scan folder 2 (optional)</label>
-                        <input id="ScanFolder2" name="ScanFolder2" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder3">Scan folder 3 (optional)</label>
-                        <input id="ScanFolder3" name="ScanFolder3" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder4">Scan folder 4 (optional)</label>
-                        <input id="ScanFolder4" name="ScanFolder4" type="text" is="emby-input" />
-                    </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="ScanFolder5">Scan folder 5 (optional)</label>
-                        <input id="ScanFolder5" name="ScanFolder5" type="text" is="emby-input" />
-                    </div>
+                <div class="sectionTitleContainer flex align-items-center">
+                    <h2 class="sectionTitle">Episode Tools</h2>
                 </div>
 
-                <div class="epTools-card">
-                    <h3>🎬 Conversion</h3>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Minimum free space before converting (GB)</label>
-                        <input id="MinFreeSpaceGb" name="MinFreeSpaceGb" type="number" min="0" max="2000" step="1" is="emby-input" />
-                        <div class="fieldDescription">Files are only converted when at least this much space is free on the destination (default 10). Protects full drives.</div>
-                    </div>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label">
-                            <input id="DeleteOriginalsAfterConvert" name="DeleteOriginalsAfterConvert" type="checkbox" is="emby-checkbox" />
-                            <span>Delete each .mkv after its .mp4 has been checked</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">Off by default. When off, both the .mkv and the .mp4 stay (Jellyfin may then show duplicates until you remove the .mkv files).</div>
-                    </div>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label">
-                            <input id="FaststartOptimize" name="FaststartOptimize" type="checkbox" is="emby-checkbox" />
-                            <span>Optimize MP4s for web playback (faststart) — slower conversion</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
-                    </div>
-                </div>
+                <div class="epAdminShell">
+                    <nav class="epAdminNav" aria-label="Episode Tools settings categories">
+                        <div class="epNavBrand">
+                            <span class="epNavLogo material-icons" aria-hidden="true">movie</span>
+                            <span class="epNavBrandText">Episode Tools</span>
+                        </div>
+                        <button type="button" class="epNavItem is-active" data-tab="settings">
+                            <span class="material-icons epNavIcon" aria-hidden="true">tune</span>
+                            <span class="epNavText"><span class="epNavLabel">Settings</span><span class="epNavSub">Folders &amp; conversion</span></span>
+                        </button>
+                        <button type="button" class="epNavItem" data-tab="shows">
+                            <span class="material-icons epNavIcon" aria-hidden="true">tv</span>
+                            <span class="epNavText"><span class="epNavLabel">Shows</span><span class="epNavSub">Per-show defaults</span></span>
+                        </button>
+                        <button type="button" class="epNavItem" data-tab="report">
+                            <span class="material-icons epNavIcon" aria-hidden="true">report_problem</span>
+                            <span class="epNavText"><span class="epNavLabel">Report</span><span class="epNavSub">Convert problems</span></span>
+                        </button>
+                        <button type="button" class="epNavItem" data-tab="subcheck">
+                            <span class="material-icons epNavIcon" aria-hidden="true">subtitles</span>
+                            <span class="epNavText"><span class="epNavLabel">Sub Check</span><span class="epNavSub">Subtitle findings</span></span>
+                        </button>
+                        <button type="button" class="epNavItem" data-tab="audit">
+                            <span class="material-icons epNavIcon" aria-hidden="true">fact_check</span>
+                            <span class="epNavText"><span class="epNavLabel">Audit</span><span class="epNavSub">Duplicates &amp; large files</span></span>
+                        </button>
+                    </nav>
 
-                <div class="epTools-card">
-                    <h3>💬 Audio &amp; subtitles</h3>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label">
-                            <input id="ConvertUnusualAudioToAac" name="ConvertUnusualAudioToAac" type="checkbox" is="emby-checkbox" />
-                            <span>Convert DTS, TrueHD and FLAC audio to AAC while converting</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On: files with such audio are no longer skipped. Only those audio tracks are re-encoded to AAC (5.1 at 448k, stereo at 192k); the video is copied untouched and AAC tracks stay as they are. Off: those files are skipped. If you also delete the .mkv, the original lossless audio is gone for good.</div>
-                    </div>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label">
-                            <input id="DropSignsSongs" name="DropSignsSongs" type="checkbox" is="emby-checkbox" />
-                            <span>Drop signs/songs/lyrics subtitle tracks when converting</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks titled signs, songs, lyrics, karaoke or titles are left out of the MP4 when a dialogue track exists — players otherwise show song lyrics flashing over the picture. Off: all tracks are kept. Check which episodes are affected on the Episode Tools Sub Check page.</div>
-                    </div>
-                    <div class="checkboxContainer checkboxContainer-withDescription">
-                        <label class="emby-checkbox-label">
-                            <input id="DropGarbageSubs" name="DropGarbageSubs" type="checkbox" is="emby-checkbox" />
-                            <span>Drop garbage subtitle tracks when converting (random numbers, ads, junk)</span>
-                        </label>
-                        <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks whose text is mostly numbers, ad/spam lines or OCR junk are left out when a better track exists. Requires python3 on the server; skipped silently when it is missing.</div>
-                    </div>
-                </div>
+                    <div class="epAdminMain">
+                        <div class="epSearch">
+                            <span class="material-icons" aria-hidden="true">search</span>
+                            <input type="search" id="EpisodeToolsSettingsSearch" class="epSearchInput" placeholder="Search settings" autocomplete="off" />
+                        </div>
 
-                <div class="epTools-card">
-                    <h3>🔔 Notifications</h3>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="NotifyWebhookUrl">Notify webhook URL (optional)</label>
-                        <input id="NotifyWebhookUrl" name="NotifyWebhookUrl" type="text" is="emby-input" />
-                        <div class="fieldDescription">When set, a POST request is sent here after every convert run finishes (apply mode). Works with ntfy.sh, Discord (via a relay) or your own script. Leave empty to disable.</div>
-                    </div>
-                </div>
+                        <!-- ============ Settings tab ============ -->
+                        <section class="epTabPanel is-active" data-tab="settings">
+                            <div class="epPageHead">
+                                <div class="epPageHeadText">
+                                    <h3 class="epPageTitle">Settings</h3>
+                                    <p class="epPageLead">Folders to watch, how MKVs are converted and where run results end up. Tasks live under Dashboard &gt; Scheduled Tasks &gt; Episode Tools; each run's output is in Dashboard &gt; Logs.</p>
+                                </div>
+                            </div>
 
-                <div>
-                    <button is="emby-button" type="submit" class="raised button-submit block emby-button">
-                        <span>Save</span>
-                    </button>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Folders</h3>
+                                <div class="epInfoLine">Rename folders must directly contain one sub folder per series (up to five). Scan folders are searched recursively for .mkv files (up to five).</div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder1">Series folder 1 (for renaming)</label>
+                                    <input id="RenameFolder1" name="RenameFolder1" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder2">Series folder 2 (optional)</label>
+                                    <input id="RenameFolder2" name="RenameFolder2" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder3">Series folder 3 (optional)</label>
+                                    <input id="RenameFolder3" name="RenameFolder3" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder4">Series folder 4 (optional)</label>
+                                    <input id="RenameFolder4" name="RenameFolder4" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder5">Series folder 5 (optional)</label>
+                                    <input id="RenameFolder5" name="RenameFolder5" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder1">Scan folder 1 (for converting .mkv to .mp4)</label>
+                                    <input id="ScanFolder1" name="ScanFolder1" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder2">Scan folder 2 (optional)</label>
+                                    <input id="ScanFolder2" name="ScanFolder2" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder3">Scan folder 3 (optional)</label>
+                                    <input id="ScanFolder3" name="ScanFolder3" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder4">Scan folder 4 (optional)</label>
+                                    <input id="ScanFolder4" name="ScanFolder4" type="text" is="emby-input" />
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="ScanFolder5">Scan folder 5 (optional)</label>
+                                    <input id="ScanFolder5" name="ScanFolder5" type="text" is="emby-input" />
+                                </div>
+                            </div>
+
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Conversion</h3>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Minimum free space before converting (GB)</label>
+                                    <input id="MinFreeSpaceGb" name="MinFreeSpaceGb" type="number" min="0" max="2000" step="1" is="emby-input" />
+                                    <div class="fieldDescription">Files are only converted when at least this much space is free on the destination (default 10). Protects full drives.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="DeleteOriginalsAfterConvert" name="DeleteOriginalsAfterConvert" type="checkbox" is="emby-checkbox" />
+                                        <span>Delete each .mkv after its .mp4 has been checked</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">Off by default. When off, both the .mkv and the .mp4 stay (Jellyfin may then show duplicates until you remove the .mkv files).</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="FaststartOptimize" name="FaststartOptimize" type="checkbox" is="emby-checkbox" />
+                                        <span>Optimize MP4s for web playback (faststart) — slower conversion</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
+                                </div>
+                            </div>
+
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Audio &amp; subtitles</h3>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="ConvertUnusualAudioToAac" name="ConvertUnusualAudioToAac" type="checkbox" is="emby-checkbox" />
+                                        <span>Convert DTS, TrueHD and FLAC audio to AAC while converting</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">On: files with such audio are no longer skipped. Only those audio tracks are re-encoded to AAC (5.1 at 448k, stereo at 192k); the video is copied untouched and AAC tracks stay as they are. Off: those files are skipped. If you also delete the .mkv, the original lossless audio is gone for good.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="DropSignsSongs" name="DropSignsSongs" type="checkbox" is="emby-checkbox" />
+                                        <span>Drop signs/songs/lyrics subtitle tracks when converting</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks titled signs, songs, lyrics, karaoke or titles are left out of the MP4 when a dialogue track exists — players otherwise show song lyrics flashing over the picture. Off: all tracks are kept. Check which episodes are affected on the Sub Check tab.</div>
+                                </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="DropGarbageSubs" name="DropGarbageSubs" type="checkbox" is="emby-checkbox" />
+                                        <span>Drop garbage subtitle tracks when converting (random numbers, ads, junk)</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks whose text is mostly numbers, ad/spam lines or OCR junk are left out when a better track exists. Requires python3 on the server; skipped silently when it is missing.</div>
+                                </div>
+                            </div>
+
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Notifications</h3>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="NotifyWebhookUrl">Notify webhook URL (optional)</label>
+                                    <input id="NotifyWebhookUrl" name="NotifyWebhookUrl" type="text" is="emby-input" />
+                                    <div class="fieldDescription">When set, a POST request is sent here after every convert run finishes (apply mode). Works with ntfy.sh, Discord (via a relay) or your own script. Leave empty to disable.</div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- ============ Shows tab ============ -->
+                        <section class="epTabPanel" data-tab="shows">
+                            <div class="epPageHead">
+                                <div class="epPageHeadText">
+                                    <h3 class="epPageTitle">Shows</h3>
+                                    <p class="epPageLead">Every show found in your series/scan folders. Choose the default subtitle language and default audio language per show — they apply the next time that show is converted: matching tracks are kept and flagged as the default for players.</p>
+                                </div>
+                                <button type="button" class="raised button-mini epRefreshBtn" data-refresh="shows">Refresh</button>
+                            </div>
+                            <div id="ConvertStatus" class="epStatusCard">
+                                <span class="material-icons epStatusIcon" aria-hidden="true">sync</span>
+                                <div class="epStatusLines">
+                                    <span class="epStatusTitle" id="ConvertStatusTitle">Converting</span>
+                                    <span class="epStatusState"><span class="epStatusDot"></span><span id="ConvertStatusMsg"></span></span>
+                                </div>
+                            </div>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Series in your folders</h3>
+                                <div id="ShowsInfo" class="epInfoLine"></div>
+                                <table class="tblDataTable detailTable" style="width:100%;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left;">Show</th>
+                                            <th>Episodes</th>
+                                            <th>.mkv</th>
+                                            <th>Subs found</th>
+                                            <th style="text-align:left;">Default subtitles</th>
+                                            <th style="text-align:left;">Default audio</th>
+                                            <th style="text-align:left;">Audio fallback</th>
+                                            <th style="text-align:left;">Save</th>
+                                            <th></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="ShowsBody">
+                                        <tr><td colspan="9">Loading…</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        <!-- ============ Report tab ============ -->
+                        <section class="epTabPanel" data-tab="report">
+                            <div class="epPageHead">
+                                <div class="epPageHeadText">
+                                    <h3 class="epPageTitle">Report</h3>
+                                    <p class="epPageLead">Every .mkv from the latest convert run that could not be converted, and why. Preview runs (the "changes nothing" tasks) are marked as preview.</p>
+                                </div>
+                                <button type="button" class="raised button-mini epRefreshBtn" data-refresh="report">Refresh</button>
+                            </div>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Files that could not be converted</h3>
+                                <div id="ReportInfo" class="epInfoLine"></div>
+                                <table class="tblDataTable detailTable" style="width:100%;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left;">File</th>
+                                            <th style="text-align:left;">Why it cannot be converted</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="ReportBody">
+                                        <tr><td colspan="2">Loading…</td></tr>
+                                    </tbody>
+                                </table>
+                                <div id="ReportEmpty" style="display:none;margin-top:1em;" class="epInfoLine">Nothing to report: every .mkv was converted or skipped for a reason that is not a problem (for example its .mp4 already exists).</div>
+                            </div>
+                        </section>
+
+                        <!-- ============ Sub Check tab ============ -->
+                        <section class="epTabPanel" data-tab="subcheck">
+                            <div class="epPageHead">
+                                <div class="epPageHeadText">
+                                    <h3 class="epPageTitle">Sub Check</h3>
+                                    <p class="epPageLead">Result of the latest 5. Check subtitles task: every episode whose subtitles look wrong (signs/songs/lyrics tracks flagged as default, lyrics-heavy content, timing that flashes for ~0.5s) and why.</p>
+                                </div>
+                                <button type="button" class="raised button-mini epRefreshBtn" data-refresh="subcheck">Refresh</button>
+                            </div>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Episodes with subtitle findings</h3>
+                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:12px;">
+                                    <input id="SubCheckFilter" type="text" is="emby-input" style="width:60%;min-width:220px;" placeholder="Filter by show or file name…" />
+                                    <label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" id="SubCheckOnlyProblems" /> only problems</label>
+                                </div>
+                                <div id="SubCheckInfo" class="epInfoLine"></div>
+                                <table class="tblDataTable detailTable" style="width:100%;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left;">Episode / file</th>
+                                            <th style="text-align:left;">Finding</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="SubCheckBody">
+                                        <tr><td colspan="2">Loading…</td></tr>
+                                    </tbody>
+                                </table>
+                                <div class="epInfoLine" style="margin-top:1em;">
+                                    Fix options: enable <b>Drop signs/songs subtitle tracks</b> in Settings and run
+                                    <b>6. Re-convert MKV to MP4 (replaces existing .mp4)</b>; or set per-show subtitle/audio
+                                    defaults on the Shows tab and re-convert.
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- ============ Audit tab ============ -->
+                        <section class="epTabPanel" data-tab="audit">
+                            <div class="epPageHead">
+                                <div class="epPageHeadText">
+                                    <h3 class="epPageTitle">Audit</h3>
+                                    <p class="epPageLead">Result of the latest 7. Audit library task: duplicate episodes (same show, season and episode in more than one file) and the largest video files — handy when space runs out.</p>
+                                </div>
+                                <button type="button" class="raised button-mini epRefreshBtn" data-refresh="audit">Refresh</button>
+                            </div>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Duplicate episodes</h3>
+                                <div style="margin-bottom:1em;">
+                                    <input id="AuditFilter" type="text" is="emby-input" style="width:60%;min-width:220px;" placeholder="Filter by show or file name…" />
+                                </div>
+                                <div id="AuditInfo" class="epInfoLine"></div>
+                                <div id="AuditDups" style="margin-bottom:1.5em;"></div>
+                            </div>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Largest files</h3>
+                                <div id="AuditBig"></div>
+                            </div>
+                        </section>
+
+                        <div class="epSaveBar">
+                            <button is="emby-button" type="submit" class="raised button-submit block">
+                                <span>Save</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </form>
         </div>
     </div>
+
     <script type="text/javascript">
-        // Sidebar-style navigation between the plugin's pages.
         (function () {
-            var pages = [
-                ['Episode Tools', ''],
-                ['Shows', 'Episode Tools Shows'],
-                ['Report', 'Episode Tools Report'],
-                ['Sub Check', 'Episode Tools Sub Check'],
-                ['Audit', 'Episode Tools Audit']
-            ];
-            // Detect which page we are on from the location hash.
-            var hash = (window.location.hash || '').toLowerCase();
-            var nav = document.querySelector('#epToolsNav');
-            pages.forEach(function (p) {
-                var a = document.createElement('a');
-                a.textContent = p[0];
-                a.href = '#';
-                var active = (p[1] === '') ? hash.indexOf('configurationpage') === -1 || hash.indexOf('name=episode+tools+') === -1
-                    : hash.indexOf(encodeURIComponent(p[1]).toLowerCase()) !== -1 || hash.indexOf(p[1].toLowerCase().replace(/ /g, '+')) !== -1;
-                if (p[1] === '') { active = hash.indexOf('name=episode+tools+') === -1; }
-                if (active) { a.className = 'active'; }
-                a.addEventListener('click', function (e) {
-                    e.preventDefault();
-                    if (p[1] === '') {
-                        Dashboard.navigate('configurationpage?name=' + encodeURIComponent('Episode Tools'));
-                    } else {
-                        Dashboard.navigate('configurationpage?name=' + encodeURIComponent(p[1]));
-                    }
+            var pluginUniqueId = '059e3874-fa20-4af9-af24-8d26823840d9';
+            var page = document.querySelector('#EpisodeToolsConfigPage');
+            var TABS = ['settings', 'shows', 'report', 'subcheck', 'audit'];
+            var tabLoaded = {};
+            var currentTab = 'settings';
+
+            /* ---------- tab switching ---------- */
+            function activateTab(tab) {
+                if (TABS.indexOf(tab) === -1) { tab = 'settings'; }
+                currentTab = tab;
+                page.querySelectorAll('.epNavItem').forEach(function (item) {
+                    item.classList.toggle('is-active', item.getAttribute('data-tab') === tab);
                 });
-                nav.appendChild(a);
+                page.querySelectorAll('.epTabPanel').forEach(function (panel) {
+                    panel.classList.toggle('is-active', panel.getAttribute('data-tab') === tab);
+                });
+                if (window.location.hash !== '#' + tab) {
+                    try { history.replaceState(null, '', '#' + tab); } catch (e) { /* ignore */ }
+                }
+                loadTabData(tab);
+            }
+
+            page.querySelectorAll('.epNavItem').forEach(function (item) {
+                item.addEventListener('click', function () {
+                    activateTab(item.getAttribute('data-tab'));
+                });
             });
-        })();
 
-        var EpisodeToolsConfig = {
-            pluginUniqueId: '059e3874-fa20-4af9-af24-8d26823840d9'
-        };
+            page.querySelectorAll('.epRefreshBtn').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    loadTabData(btn.getAttribute('data-refresh'), true);
+                });
+            });
 
-        document.querySelector('#EpisodeToolsConfigPage')
-            .addEventListener('pageshow', function () {
+            /* ---------- settings search ---------- */
+            var searchInput = document.querySelector('#EpisodeToolsSettingsSearch');
+            searchInput.addEventListener('input', function () {
+                var q = (searchInput.value || '').trim().toLowerCase();
+                if (!q) {
+                    page.classList.remove('ep-searching');
+                    page.querySelectorAll('.ep-hidden-by-search').forEach(function (el) {
+                        el.classList.remove('ep-hidden-by-search');
+                    });
+                    return;
+                }
+                page.classList.add('ep-searching');
+                page.querySelectorAll('.epTabPanel .verticalSection, .epTabPanel .epPageHead').forEach(function (el) {
+                    var match = (el.textContent || '').toLowerCase().indexOf(q) !== -1;
+                    el.classList.toggle('ep-hidden-by-search', !match);
+                });
+                // A tab whose every card was hidden shows an empty page; hide its head too.
+                page.querySelectorAll('.epTabPanel').forEach(function (panel) {
+                    var anyVisible = Array.prototype.some.call(
+                        panel.querySelectorAll('.verticalSection'),
+                        function (card) { return !card.classList.contains('ep-hidden-by-search'); });
+                    var head = panel.querySelector('.epPageHead');
+                    if (head) { head.classList.toggle('ep-hidden-by-search', !anyVisible); }
+                });
+            });
+
+            /* ---------- settings (load + save) ---------- */
+            function loadSettings() {
                 Dashboard.showLoadingMsg();
-                ApiClient.getPluginConfiguration(EpisodeToolsConfig.pluginUniqueId).then(function (config) {
+                ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
                     var renameFolders = config.RenameFolders || [];
                     for (var r = 1; r <= 5; r++) {
                         document.querySelector('#RenameFolder' + r).value = renameFolders[r - 1] || '';
@@ -221,43 +827,554 @@
                     document.querySelector('#NotifyWebhookUrl').value = config.NotifyWebhookUrl || '';
                     Dashboard.hideLoadingMsg();
                 });
-            });
+            }
 
-        document.querySelector('#EpisodeToolsConfigForm')
-            .addEventListener('submit', function (e) {
-                Dashboard.showLoadingMsg();
-                ApiClient.getPluginConfiguration(EpisodeToolsConfig.pluginUniqueId).then(function (config) {
-                    var renameFolders = [];
-                    for (var r = 1; r <= 5; r++) {
-                        var rValue = document.querySelector('#RenameFolder' + r).value.trim();
-                        if (rValue) {
-                            renameFolders.push(rValue);
+            document.querySelector('#EpisodeToolsConfigForm')
+                .addEventListener('submit', function (e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
+                        var renameFolders = [];
+                        for (var r = 1; r <= 5; r++) {
+                            var rValue = document.querySelector('#RenameFolder' + r).value.trim();
+                            if (rValue) {
+                                renameFolders.push(rValue);
+                            }
                         }
-                    }
-                    config.RenameFolders = renameFolders;
-                    var folders = [];
-                    for (var i = 1; i <= 5; i++) {
-                        var value = document.querySelector('#ScanFolder' + i).value.trim();
-                        if (value) {
-                            folders.push(value);
+                        config.RenameFolders = renameFolders;
+                        var folders = [];
+                        for (var i = 1; i <= 5; i++) {
+                            var value = document.querySelector('#ScanFolder' + i).value.trim();
+                            if (value) {
+                                folders.push(value);
+                            }
                         }
-                    }
-                    config.ConvertFolders = folders;
-                    config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
-                    config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
-                    config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
-                    config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
-                    config.DropGarbageSubs = document.querySelector('#DropGarbageSubs').checked;
-                    var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
-                    config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
-                    config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();
-                    ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
-                        Dashboard.processPluginConfigurationUpdateResult(result);
+                        config.ConvertFolders = folders;
+                        config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
+                        config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
+                        config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
+                        config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
+                        config.DropGarbageSubs = document.querySelector('#DropGarbageSubs').checked;
+                        var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
+                        config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
+                        config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();
+                        ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
                     });
+                    e.preventDefault();
+                    return false;
                 });
-                e.preventDefault();
-                return false;
+
+            /* ---------- shows tab ---------- */
+            var SUB_OPTIONS = [
+                ['', 'Keep all subtitles'],
+                ['none', 'Drop subtitles'],
+                ['nl', 'Dutch (nl)'], ['en', 'English (en)'], ['de', 'German (de)'],
+                ['fr', 'French (fr)'], ['es', 'Spanish (es)'], ['it', 'Italian (it)'],
+                ['ja', 'Japanese (ja)'], ['ko', 'Korean (ko)'], ['pt', 'Portuguese (pt)'],
+                ['ru', 'Russian (ru)'], ['sv', 'Swedish (sv)'], ['pl', 'Polish (pl)']
+            ];
+            var AUD_OPTIONS = [
+                ['', 'Keep all audio'],
+                ['nl', 'Dutch (nl)'], ['en', 'English (en)'], ['de', 'German (de)'],
+                ['fr', 'French (fr)'], ['es', 'Spanish (es)'], ['it', 'Italian (it)'],
+                ['ja', 'Japanese (ja)'], ['ko', 'Korean (ko)'], ['pt', 'Portuguese (pt)']
+            ];
+            var AUD_FALLBACK_OPTIONS = [
+                ['', 'No fallback'],
+                ['nl', 'Dutch (nl)'], ['en', 'English (en)'], ['de', 'German (de)'],
+                ['fr', 'French (fr)'], ['es', 'Spanish (es)'], ['it', 'Italian (it)'],
+                ['ja', 'Japanese (ja)'], ['ko', 'Korean (ko)'], ['pt', 'Portuguese (pt)']
+            ];
+
+            function fillSelect(sel, options, current) {
+                sel.innerHTML = '';
+                for (var i = 0; i < options.length; i++) {
+                    var opt = document.createElement('option');
+                    opt.value = options[i][0];
+                    opt.textContent = options[i][1];
+                    sel.appendChild(opt);
+                }
+                var has = false;
+                for (var j = 0; j < sel.options.length; j++) {
+                    if (sel.options[j].value === current) { has = true; break; }
+                }
+                sel.value = has ? current : '';
+            }
+
+            function savePref(show, sub, aud, aud2, btn) {
+                btn.disabled = true;
+                btn.textContent = '…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/ShowPrefs'),
+                    dataType: 'text',
+                    data: JSON.stringify({ show: show, sub: sub, aud: aud, aud2: aud2 }),
+                    contentType: 'application/json'
+                }).then(function () {
+                    btn.textContent = 'Saved ✓';
+                    setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 1500);
+                }).catch(function () {
+                    btn.textContent = 'Failed ✗';
+                    setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 2500);
+                });
+            }
+
+            function convertShow(folder, btn) {
+                btn.disabled = true;
+                btn.textContent = '…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/ConvertShow'),
+                    dataType: 'text',
+                    data: JSON.stringify({ folder: folder }),
+                    contentType: 'application/json'
+                }).then(function () {
+                    btn.textContent = 'Started ✓';
+                    setTimeout(function () { btn.textContent = 'Convert'; btn.disabled = false; }, 1500);
+                    pollStatus();
+                }).catch(function () {
+                    btn.textContent = 'Failed ✗';
+                    setTimeout(function () { btn.textContent = 'Convert'; btn.disabled = false; }, 2500);
+                });
+            }
+
+            var statusTimer = null;
+            function pollStatus() {
+                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/ConvertStatus'), dataType: 'json' })
+                    .then(function (st) {
+                        var card = document.querySelector('#ConvertStatus');
+                        if (st.running) {
+                            document.querySelector('#ConvertStatusTitle').textContent =
+                                'Converting: ' + (st.folder || '').split('/').pop();
+                            document.querySelector('#ConvertStatusMsg').textContent = st.message || '';
+                            card.classList.add('is-visible');
+                            if (!statusTimer) { statusTimer = setInterval(pollStatus, 3000); }
+                        } else {
+                            card.classList.remove('is-visible');
+                            if (st.result) {
+                                document.querySelector('#ConvertStatusTitle').textContent = 'Last per-show run';
+                                document.querySelector('#ConvertStatusMsg').textContent = st.result;
+                                card.classList.add('is-visible');
+                            }
+                            if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+                        }
+                    }).catch(function () { });
+            }
+
+            function loadShows() {
+                Dashboard.showLoadingMsg();
+                Promise.all([
+                    ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/Shows'), dataType: 'json' }),
+                    ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/ShowPrefs'), dataType: 'json' })
+                ]).then(function (results) {
+                    var data = results[0];
+                    var prefData = results[1] || { prefs: [] };
+                    var prefs = {};
+                    (prefData.prefs || []).forEach(function (p) {
+                        prefs[(p.show || '').toLowerCase()] = { sub: p.sub || '', aud: p.aud || '', aud2: p.aud2 || '' };
+                    });
+
+                    var body = document.querySelector('#ShowsBody');
+                    body.innerHTML = '';
+                    var shows = data.shows || [];
+                    document.querySelector('#ShowsInfo').textContent =
+                        shows.length + ' show(s) found' + (data.foldersScanned ? ' in ' + data.foldersScanned + ' folder(s).' : '.');
+
+                    shows.forEach(function (s) {
+                        var saved = prefs[(s.name || '').toLowerCase()] || { sub: '', aud: '', aud2: '' };
+                        var tr = document.createElement('tr');
+
+                        var tdName = document.createElement('td');
+                        tdName.textContent = s.name;
+                        tdName.style.wordBreak = 'break-all';
+                        tr.appendChild(tdName);
+
+                        var tdEp = document.createElement('td');
+                        tdEp.textContent = s.episodes;
+                        tdEp.style.textAlign = 'center';
+                        tr.appendChild(tdEp);
+
+                        var tdMkv = document.createElement('td');
+                        tdMkv.textContent = s.mkv;
+                        tdMkv.style.textAlign = 'center';
+                        tr.appendChild(tdMkv);
+
+                        var tdLangs = document.createElement('td');
+                        tdLangs.textContent = (s.subLangs && s.subLangs.length ? s.subLangs.join(', ') : '—');
+                        tdLangs.style.textAlign = 'center';
+                        tr.appendChild(tdLangs);
+
+                        var tdSub = document.createElement('td');
+                        var selSub = document.createElement('select');
+                        selSub.className = 'selectEpisodeTools';
+                        fillSelect(selSub, SUB_OPTIONS, saved.sub);
+                        tdSub.appendChild(selSub);
+                        tr.appendChild(tdSub);
+
+                        var tdAud = document.createElement('td');
+                        var selAud = document.createElement('select');
+                        selAud.className = 'selectEpisodeTools';
+                        fillSelect(selAud, AUD_OPTIONS, saved.aud);
+                        tdAud.appendChild(selAud);
+                        tr.appendChild(tdAud);
+
+                        var tdAud2 = document.createElement('td');
+                        var selAud2 = document.createElement('select');
+                        selAud2.className = 'selectEpisodeTools';
+                        fillSelect(selAud2, AUD_FALLBACK_OPTIONS, saved.aud2);
+                        tdAud2.appendChild(selAud2);
+                        tr.appendChild(tdAud2);
+
+                        var tdBtn = document.createElement('td');
+                        var btn = document.createElement('button');
+                        btn.setAttribute('is', 'emby-button');
+                        btn.setAttribute('type', 'button');
+                        btn.className = 'raised button-mini emby-button';
+                        btn.textContent = saved.sub || saved.aud || saved.aud2 ? 'Update' : 'Save';
+                        btn.addEventListener('click', function () {
+                            savePref(s.name, selSub.value, selAud.value, selAud2.value, btn);
+                        });
+                        tdBtn.appendChild(btn);
+                        tr.appendChild(tdBtn);
+
+                        var tdConv = document.createElement('td');
+                        var convBtn = document.createElement('button');
+                        convBtn.setAttribute('is', 'emby-button');
+                        convBtn.setAttribute('type', 'button');
+                        convBtn.className = 'raised button-mini emby-button';
+                        convBtn.textContent = 'Convert';
+                        convBtn.title = 'Convert this show now (remuxes its .mkv files with the current settings)';
+                        convBtn.addEventListener('click', function () {
+                            convertShow(s.folder || '', convBtn);
+                        });
+                        tdConv.appendChild(convBtn);
+                        tr.appendChild(tdConv);
+
+                        body.appendChild(tr);
+                    });
+
+                    if (shows.length === 0) {
+                        body.innerHTML = '<tr><td colspan="9">No shows found — check the folders on the Settings tab.</td></tr>';
+                    }
+                    pollStatus();
+                    Dashboard.hideLoadingMsg();
+                }).catch(function () {
+                    document.querySelector('#ShowsBody').innerHTML =
+                        '<tr><td colspan="9">Could not load the shows. Is plugin v2.2.0+ installed?</td></tr>';
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            /* ---------- report tab ---------- */
+            function renderReport(lines) {
+                var body = document.querySelector('#ReportBody');
+                var info = document.querySelector('#ReportInfo');
+                var empty = document.querySelector('#ReportEmpty');
+                body.innerHTML = '';
+                var mode = '', date = '', count = 0;
+                for (var i = 0; i < lines.length; i++) {
+                    var cols = lines[i].split('\t');
+                    if (cols[0] === 'RUN') {
+                        mode = cols[1] || '';
+                        date = cols[2] || '';
+                        continue;
+                    }
+                    if (cols[0] !== 'CANNOT') {
+                        continue;
+                    }
+                    count++;
+                    var tr = document.createElement('tr');
+                    var tdFile = document.createElement('td');
+                    var tdWhy = document.createElement('td');
+                    tdFile.textContent = cols[1] || '';
+                    tdFile.style.wordBreak = 'break-all';
+                    tdWhy.textContent = cols.slice(2).join(' ') || '';
+                    tr.appendChild(tdFile);
+                    tr.appendChild(tdWhy);
+                    body.appendChild(tr);
+                }
+                if (mode) {
+                    info.textContent = 'Latest run: ' + (mode === 'apply' ? 'real conversion' : 'preview (nothing was changed)')
+                        + ' — ' + date.replace('T', ' ').replace('Z', ' UTC');
+                }
+                if (count === 0) {
+                    empty.style.display = 'block';
+                } else {
+                    empty.style.display = 'none';
+                }
+            }
+
+            function loadReport() {
+                Dashboard.showLoadingMsg();
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('EpisodeTools/Report'),
+                    dataType: 'text'
+                }).then(function (text) {
+                    renderReport((text || '').split(/\r?\n/));
+                    Dashboard.hideLoadingMsg();
+                }).catch(function () {
+                    document.querySelector('#ReportBody').innerHTML =
+                        '<tr><td colspan="2">Could not load the report. Is plugin v2.0.0+ installed?</td></tr>';
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            /* ---------- sub check tab ---------- */
+            var allSubRows = [];
+
+            function applySubFilter() {
+                var q = (document.querySelector('#SubCheckFilter').value || '').toLowerCase();
+                var onlyProblems = document.querySelector('#SubCheckOnlyProblems').checked;
+                var body = document.querySelector('#SubCheckBody');
+                body.innerHTML = '';
+                var shown = 0;
+                allSubRows.forEach(function (row) {
+                    if (onlyProblems && !row.hasWarn) return;
+                    if (q && row.path.toLowerCase().indexOf(q) === -1) return;
+                    shown++;
+                    body.appendChild(row.el);
+                });
+                if (shown === 0 && allSubRows.length > 0) {
+                    body.innerHTML = '<tr><td colspan="2">Nothing matches the filter.</td></tr>';
+                }
+            }
+
+            function renderSubCheck(lines) {
+                var body = document.querySelector('#SubCheckBody');
+                var info = document.querySelector('#SubCheckInfo');
+                body.innerHTML = '';
+                allSubRows = [];
+                var mode = '', date = '', warns = 0, oks = 0;
+
+                var order = [];
+                var byPath = {};
+                for (var i = 0; i < lines.length; i++) {
+                    var cols = lines[i].split('\t');
+                    if (cols[0] === 'RUN') { mode = cols[1] || ''; date = cols[2] || ''; continue; }
+                    if (cols[0] !== 'SUBWARN' && cols[0] !== 'SUBOK' && cols[0] !== 'SUBINFO') continue;
+                    var p = cols[1] || '';
+                    if (!byPath[p]) { byPath[p] = []; order.push(p); }
+                    byPath[p].push({ kind: cols[0], msg: cols.slice(2).join(' ') });
+                }
+
+                order.forEach(function (p) {
+                    var findings = byPath[p];
+                    var hasWarn = findings.some(function (f) { return f.kind === 'SUBWARN'; });
+                    if (hasWarn) warns++; else if (findings.some(function (f) { return f.kind === 'SUBOK'; })) oks++;
+
+                    var tr = document.createElement('tr');
+                    var tdFile = document.createElement('td');
+                    tdFile.textContent = p;
+                    tdFile.style.wordBreak = 'break-all';
+                    if (hasWarn) { tdFile.style.color = '#c33'; }
+                    tr.appendChild(tdFile);
+
+                    var tdMsg = document.createElement('td');
+                    findings.forEach(function (f) {
+                        var div = document.createElement('div');
+                        div.style.wordBreak = 'break-all';
+                        div.textContent = (f.kind === 'SUBWARN' ? '⚠ ' : f.kind === 'SUBOK' ? '✓ ' : '· ') + f.msg;
+                        if (f.kind === 'SUBWARN') { div.style.color = '#c33'; }
+                        if (f.kind === 'SUBINFO') { div.style.opacity = '0.7'; }
+                        tdMsg.appendChild(div);
+                    });
+                    tr.appendChild(tdMsg);
+                    body.appendChild(tr);
+                    allSubRows.push({ path: p, findings: findings, hasWarn: hasWarn, el: tr });
+                });
+
+                info.textContent = 'Latest check: ' + date.replace('T', ' ').replace('Z', ' UTC')
+                    + ' — ' + warns + ' episode(s) with problems, ' + oks + ' fine.';
+                if (order.length === 0) {
+                    body.innerHTML = '<tr><td colspan="2">Nothing reported yet.</td></tr>';
+                }
+            }
+
+            function loadSubCheck() {
+                Dashboard.showLoadingMsg();
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('EpisodeTools/SubCheck'),
+                    dataType: 'text'
+                }).then(function (text) {
+                    renderSubCheck((text || '').split(/\r?\n/));
+                    applySubFilter();
+                    Dashboard.hideLoadingMsg();
+                }).catch(function () {
+                    document.querySelector('#SubCheckBody').innerHTML =
+                        '<tr><td colspan="2">Could not load the sub check. Is plugin v1.5.0+ installed?</td></tr>';
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            document.querySelector('#SubCheckFilter').addEventListener('input', applySubFilter);
+            document.querySelector('#SubCheckOnlyProblems').addEventListener('change', applySubFilter);
+
+            /* ---------- audit tab ---------- */
+            var allDups = [];  // {key, files:[{path,size}], el}
+
+            function applyAuditFilter() {
+                var q = (document.querySelector('#AuditFilter').value || '').toLowerCase();
+                allDups.forEach(function (g) {
+                    var match = !q || g.key.toLowerCase().indexOf(q) !== -1 ||
+                        g.files.some(function (f) { return f.path.toLowerCase().indexOf(q) !== -1; });
+                    g.el.style.display = match ? '' : 'none';
+                });
+            }
+
+            document.querySelector('#AuditFilter').addEventListener('input', applyAuditFilter);
+
+            function resolveDuplicate(key, action, groupEl) {
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/AuditAction'),
+                    dataType: 'text',
+                    data: JSON.stringify({ key: key, action: action }),
+                    contentType: 'application/json'
+                }).then(function (text) {
+                    var res = JSON.parse(text || '{}');
+                    var note = document.createElement('div');
+                    note.className = 'epInfoLine';
+                    note.style.margin = '0.5em 0 0 1em';
+                    note.textContent = 'Resolved: kept ' + (res.kept || '').split('/').pop()
+                        + (res.removed ? ', removed ' + res.removed.length + ' file(s)' : '')
+                        + (res.errors && res.errors.length ? ', ' + res.errors.length + ' error(s)' : '')
+                        + (res.trash ? ' (trash: ' + res.trash + ')' : '');
+                    groupEl.appendChild(note);
+                    groupEl.querySelectorAll('button, select').forEach(function (el) { el.disabled = true; });
+                }).catch(function () {
+                    alert('Resolving failed — see Dashboard > Logs.');
+                });
+            }
+
+            function fmtSize(bytes) {
+                var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                var n = parseFloat(bytes) || 0, u = 0;
+                while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+                return (u === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[u];
+            }
+
+            function renderAudit(lines) {
+                var dups = {};
+                var dupOrder = [];
+                var big = [];
+                var date = '', totalBytes = 0, totalFiles = 0;
+                for (var i = 0; i < lines.length; i++) {
+                    var cols = lines[i].split('\t');
+                    if (cols[0] === 'RUN') { date = cols[2] || ''; continue; }
+                    if (cols[0] === 'DUP') {
+                        var key = cols[1] || '';
+                        if (!dups[key]) { dups[key] = []; dupOrder.push(key); }
+                        dups[key].push({ path: cols[2] || '', size: cols[3] || '0' });
+                    } else if (cols[0] === 'BIG') {
+                        big.push({ size: cols[1] || '0', path: cols[2] || '' });
+                    } else if (cols[0] === 'TOTAL') {
+                        totalBytes += parseFloat(cols[1]) || 0;
+                        totalFiles++;
+                    }
+                }
+
+                document.querySelector('#AuditInfo').textContent =
+                    'Latest audit: ' + date.replace('T', ' ').replace('Z', ' UTC')
+                    + ' — ' + dupOrder.length + ' duplicate episode group(s), ' + totalFiles + ' folder(s) scanned.';
+
+                var dupDiv = document.querySelector('#AuditDups');
+                dupDiv.innerHTML = '';
+                allDups = [];
+                if (dupOrder.length === 0) {
+                    dupDiv.innerHTML = '<div class="epInfoLine">No duplicate episodes found — nice.</div>';
+                } else {
+                    dupOrder.forEach(function (key) {
+                        var parts = key.split('|');
+                        var head = document.createElement('div');
+                        head.style.fontWeight = 'bold';
+                        head.textContent = (parts[0] || '?') + ' S' + (parts[1] || '') + 'E' + (parts[2] || '') + ' — ' + dups[key].length + ' files';
+                        dupDiv.appendChild(head);
+                        dups[key].forEach(function (f) {
+                            var row = document.createElement('div');
+                            row.style.wordBreak = 'break-all';
+                            row.style.marginLeft = '1em';
+                            row.textContent = '• ' + fmtSize(f.size) + ' — ' + f.path;
+                            dupDiv.appendChild(row);
+                        });
+
+                        var actions = document.createElement('div');
+                        actions.style.marginLeft = '1em';
+                        actions.style.marginBottom = '1em';
+                        var sel = document.createElement('select');
+                        sel.className = 'selectEpisodeTools';
+                        [['keep-largest', 'Keep largest, archive others'], ['keep-newest', 'Keep newest, archive others'], ['delete-others', 'Keep largest, DELETE others']].forEach(function (o) {
+                            var opt = document.createElement('option');
+                            opt.value = o[0];
+                            opt.textContent = o[1];
+                            sel.appendChild(opt);
+                        });
+                        var go = document.createElement('button');
+                        go.setAttribute('is', 'emby-button');
+                        go.setAttribute('type', 'button');
+                        go.className = 'raised button-mini emby-button';
+                        go.textContent = 'Resolve';
+                        var groupEl = document.createElement('div');
+                        groupEl.appendChild(sel);
+                        groupEl.appendChild(go);
+                        dupDiv.appendChild(groupEl);
+                        go.addEventListener('click', function () {
+                            if (sel.value === 'delete-others' && !confirm('Delete the smaller files permanently?')) return;
+                            resolveDuplicate(key, sel.value, groupEl);
+                        });
+                        allDups.push({ key: key, files: dups[key], el: groupEl });
+                    });
+                }
+
+                var bigDiv = document.querySelector('#AuditBig');
+                bigDiv.innerHTML = '';
+                if (big.length === 0) {
+                    bigDiv.innerHTML = '<div class="epInfoLine">Nothing found yet.</div>';
+                } else {
+                    big.forEach(function (f) {
+                        var row = document.createElement('div');
+                        row.style.wordBreak = 'break-all';
+                        row.textContent = '• ' + fmtSize(f.size) + ' — ' + f.path;
+                        bigDiv.appendChild(row);
+                    });
+                }
+            }
+
+            function loadAudit() {
+                Dashboard.showLoadingMsg();
+                ApiClient.ajax({
+                    type: 'GET',
+                    url: ApiClient.getUrl('EpisodeTools/Audit'),
+                    dataType: 'text'
+                }).then(function (text) {
+                    allDups = [];
+                    renderAudit((text || '').split(/\r?\n/));
+                    applyAuditFilter();
+                    Dashboard.hideLoadingMsg();
+                }).catch(function () {
+                    document.querySelector('#AuditInfo').textContent = 'Could not load the audit. Is plugin v2.0.0+ installed?';
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            /* ---------- lazy tab data + pageshow ---------- */
+            function loadTabData(tab, force) {
+                if (tab === 'settings') { loadSettings(); return; }
+                if (!force && tabLoaded[tab]) { return; }
+                tabLoaded[tab] = true;
+                if (tab === 'shows') { loadShows(); }
+                else if (tab === 'report') { loadReport(); }
+                else if (tab === 'subcheck') { loadSubCheck(); }
+                else if (tab === 'audit') { loadAudit(); }
+            }
+
+            page.addEventListener('pageshow', function () {
+                var hash = (window.location.hash || '').replace('#', '').toLowerCase();
+                activateTab(hash || 'settings');
             });
+        })();
     </script>
 </div>
 </body>

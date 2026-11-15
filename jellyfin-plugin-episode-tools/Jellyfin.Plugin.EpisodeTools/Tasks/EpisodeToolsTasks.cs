@@ -174,7 +174,7 @@ public sealed class SubCheckTask : IScheduledTask
     public string Key => "EpisodeToolsSubCheck";
 
     /// <inheritdoc />
-    public string Description => "Analyses the subtitle tracks of every episode: flags signs/songs/lyrics tracks, lyrics-heavy content and broken timing, and warns when the default track is the wrong one. Read the result under Dashboard > Plugins > Episode Tools > Episode Tools Sub Check.";
+    public string Description => "Analyses the subtitle tracks of every episode: flags signs/songs/lyrics tracks, lyrics-heavy content and broken timing, and warns when the default track is the wrong one. Read the result under Dashboard > Plugins > Episode Tools > Sub Check.";
 
     /// <inheritdoc />
     public string Category => "Episode Tools";
@@ -215,7 +215,7 @@ public sealed class AuditTask : IScheduledTask
     public string Key => "EpisodeToolsAudit";
 
     /// <inheritdoc />
-    public string Description => "Read-only audit of the series folders: finds video files that parse as the same episode (duplicates) and lists the largest files. Read the result under Dashboard > Plugins > Episode Tools > Episode Tools Audit.";
+    public string Description => "Read-only audit of the series folders: finds video files that parse as the same episode (duplicates) and lists the largest files. Read the result under Dashboard > Plugins > Episode Tools > Audit.";
 
     /// <inheritdoc />
     public string Category => "Episode Tools";
