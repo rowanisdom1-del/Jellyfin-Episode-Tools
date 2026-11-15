@@ -254,59 +254,83 @@ internal static class IntrosRunner
         var cacheDir = Path.Combine(work, "intros-fpcache");
         Directory.CreateDirectory(cacheDir);
 
-        // Fingerprint what is missing from the cache, in parallel.
-        var missing = new List<Job>();
-        foreach (var job in jobs)
+        // Compare seasons: every episode against the episodes that come after it.
+        // Seasons are processed one at a time and results are saved after each one,
+        // so intros stream in as the scan runs instead of only at the very end.
+        var seasons = jobs.GroupBy(j => j.SeasonKey, StringComparer.OrdinalIgnoreCase).ToList();
+        logger.LogInformation(
+            "[Episode Tools] Intro scan: {Jobs} episode(s) in {Seasons} season group(s).",
+            jobs.Count,
+            seasons.Count);
+
+        var totalMissing = jobs.Count(j => j.Points is null);
+        var done = 0;
+        var found = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
+        var jsonOpts = new System.Text.Json.JsonSerializerOptions
         {
-            if (TryLoadCached(cacheDir, job.Path, window, out var points))
+            WriteIndented = true,
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+        };
+
+        void WriteState()
+        {
+            var results = found.Values
+                .OrderBy(r => r.Show, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(r => r.File, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var state = new IntrosState
             {
-                job.Points = points;
-            }
-            else
-            {
-                missing.Add(job);
-            }
+                ScannedAt = DateTime.UtcNow,
+                WindowSeconds = window,
+                Intros = results
+            };
+
+            Directory.CreateDirectory(work);
+            File.WriteAllText(ResultsPath, System.Text.Json.JsonSerializer.Serialize(state, jsonOpts));
         }
 
-        var done = 0;
-        var total = missing.Count;
-        _lastMessage = $"fingerprinting {total} episode(s)";
-
-        await Parallel.ForEachAsync(
-            missing,
-            new ParallelOptions
-            {
-                MaxDegreeOfParallelism = parallelism,
-                CancellationToken = ct
-            },
-            async (job, token) =>
-            {
-                job.Points = await FingerprintAsync(job.Path, window, logger, token).ConfigureAwait(false);
-                if (job.Points is not null && job.Points.Length > 0)
-                {
-                    SaveCached(cacheDir, job, window);
-                }
-
-                var count = Interlocked.Increment(ref done);
-                _lastProgress = 100.0 * count / Math.Max(1, total);
-                _lastMessage = $"fingerprinting {count}/{total} episodes";
-            }).ConfigureAwait(false);
-
-        // Compare seasons: every episode against the episodes that come after it.
-        _lastMessage = "comparing episodes";
-        var found = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
-        var seasons = jobs.GroupBy(j => j.SeasonKey, StringComparer.OrdinalIgnoreCase);
-        logger.LogInformation(
-            "[Episode Tools] Intro scan: {Jobs} episode(s) in {Seasons} season group(s); {Missing} to fingerprint.",
-            jobs.Count,
-            seasons.Count(),
-            total);
-
+        var seasonIndex = 0;
         foreach (var season in seasons)
         {
+            seasonIndex++;
             ct.ThrowIfCancellationRequested();
 
-            var queue = new List<Job>(season.Where(j => j.Points is { Length: > 0 }));
+            var queue = season.Where(j => j.Points is { Length: > 0 }).ToList();
+            var missing = season.Where(j => j.Points is null).ToList();
+
+            if (missing.Count > 0)
+            {
+                _lastMessage = $"season {seasonIndex}/{seasons.Count}: fingerprinting {missing.Count} episode(s)";
+
+                await Parallel.ForEachAsync(
+                    missing,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = parallelism,
+                        CancellationToken = ct
+                    },
+                    async (job, token) =>
+                    {
+                        job.Points = await FingerprintAsync(job.Path, window, logger, token).ConfigureAwait(false);
+                        if (job.Points is not null && job.Points.Length > 0)
+                        {
+                            SaveCached(cacheDir, job, window);
+                        }
+
+                        var count = Interlocked.Increment(ref done);
+                        _lastProgress = 100.0 * count / Math.Max(1, totalMissing);
+                        _lastMessage = $"fingerprinting {count}/{totalMissing} episodes (season {seasonIndex}/{seasons.Count})";
+                    }).ConfigureAwait(false);
+            }
+
+            queue = season.Where(j => j.Points is { Length: > 0 }).ToList();
+            if (queue.Count < 2)
+            {
+                continue;
+            }
+
+            _lastMessage = $"season {seasonIndex}/{seasons.Count}: comparing {queue.Count} episode(s)";
             var bounds = new Dictionary<string, (double Start, double End)>(StringComparer.OrdinalIgnoreCase);
 
             for (var i = 0; i < queue.Count; i++)
@@ -342,34 +366,24 @@ internal static class IntrosRunner
                     End = Math.Round(end, 2)
                 };
             }
+
+            WriteState();
+            _lastMessage = $"season {seasonIndex}/{seasons.Count}: {found.Count} intro(s) so far";
+            logger.LogInformation(
+                "[Episode Tools] Intro scan: season {Index}/{Total} done; {Count} intro(s) so far.",
+                seasonIndex,
+                seasons.Count,
+                found.Count);
         }
 
-        var results = found.Values
-            .OrderBy(r => r.Show, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.File, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        WriteState();
 
-        var state = new IntrosState
-        {
-            ScannedAt = DateTime.UtcNow,
-            WindowSeconds = window,
-            Intros = results
-        };
-
-        Directory.CreateDirectory(work);
-        File.WriteAllText(
-            ResultsPath,
-            System.Text.Json.JsonSerializer.Serialize(state, new System.Text.Json.JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
-            }));
-
-        _lastMessage = $"finished: {results.Count} intro(s) in {jobs.Count} episode(s)";
+        var results2 = found.Values.OrderBy(r => r.Show, StringComparer.OrdinalIgnoreCase).ToList();
+        _lastMessage = $"finished: {results2.Count} intro(s) in {jobs.Count} episode(s)";
         _lastProgress = 100;
         logger.LogInformation(
             "[Episode Tools] Fast intro scan finished: {Count} intro(s) from {Episodes} episode(s).",
-            results.Count,
+            results2.Count,
             jobs.Count);
     }
 
