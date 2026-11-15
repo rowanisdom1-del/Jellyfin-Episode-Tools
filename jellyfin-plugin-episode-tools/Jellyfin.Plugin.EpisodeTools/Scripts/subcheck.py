@@ -185,7 +185,7 @@ def main():
     if report_file:
         try:
             with open(report_file, "w", encoding="utf-8") as f:
-                f.write(f"RUN\tsubcheck\t{__import__('datetime').datetime.utcnow().isoformat()}Z\n")
+                f.write(f"RUN\tsubcheck\t{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
         except OSError:
             report_file = ""
 
@@ -198,7 +198,6 @@ def main():
     checked = 0
     problems = 0
 
-    import os
     for base in folders:
         if not os.path.isdir(base):
             print(f"Folder not found: {base}")

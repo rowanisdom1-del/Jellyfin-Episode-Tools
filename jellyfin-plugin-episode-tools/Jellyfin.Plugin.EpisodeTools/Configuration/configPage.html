@@ -75,6 +75,11 @@
                     </label>
                     <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
                 </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Minimum free space before converting (GB)</label>
+                    <input id="MinFreeSpaceGb" name="MinFreeSpaceGb" type="number" min="0" max="2000" step="1" is="emby-input" />
+                    <div class="fieldDescription">Files are only converted when at least this much space is free on the destination (default 10). Protects full drives.</div>
+                </div>
                 <div class="checkboxContainer checkboxContainer-withDescription">
                     <label class="emby-checkbox-label">
                         <input id="DropSignsSongs" name="DropSignsSongs" type="checkbox" is="emby-checkbox" />
@@ -111,6 +116,7 @@
                     document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
                     document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
                     document.querySelector('#DropSignsSongs').checked = config.DropSignsSongs !== false;
+                    document.querySelector('#MinFreeSpaceGb').value = (config.MinFreeSpaceGb !== undefined && config.MinFreeSpaceGb !== null) ? config.MinFreeSpaceGb : 10;
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -139,6 +145,8 @@
                     config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
                     config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
                     config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
+                    var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
+                    config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });

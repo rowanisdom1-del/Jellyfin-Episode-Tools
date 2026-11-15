@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Episode Tools Audit</title>
+</head>
+<body>
+<div id="EpisodeToolsAuditPage" data-role="page" class="page type-interior">
+    <div data-role="content">
+        <div class="content-primary">
+            <h2>Episode Tools — Library Audit</h2>
+            <p>Result of the latest <b>7. Audit library</b> task: duplicate episodes (same show, season
+            and episode in more than one file) and the largest video files — handy when space runs out.</p>
+            <div id="AuditInfo" class="fieldDescription" style="margin-bottom:1em;"></div>
+
+            <h3 style="margin-bottom:0.5em;">Duplicate episodes</h3>
+            <div id="AuditDups" style="margin-bottom:1.5em;"></div>
+
+            <h3 style="margin-bottom:0.5em;">Largest files</h3>
+            <div id="AuditBig"></div>
+        </div>
+    </div>
+    <script type="text/javascript">
+        (function () {
+            function fmtSize(bytes) {
+                var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                var n = parseFloat(bytes) || 0, u = 0;
+                while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+                return (u === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[u];
+            }
+
+            function render(lines) {
+                var dups = {};
+                var dupOrder = [];
+                var big = [];
+                var date = '', totalBytes = 0, totalFiles = 0;
+                for (var i = 0; i < lines.length; i++) {
+                    var cols = lines[i].split('\t');
+                    if (cols[0] === 'RUN') { date = cols[2] || ''; continue; }
+                    if (cols[0] === 'DUP') {
+                        var key = cols[1] || '';
+                        if (!dups[key]) { dups[key] = []; dupOrder.push(key); }
+                        dups[key].push({ path: cols[2] || '', size: cols[3] || '0' });
+                    } else if (cols[0] === 'BIG') {
+                        big.push({ size: cols[1] || '0', path: cols[2] || '' });
+                    } else if (cols[0] === 'TOTAL') {
+                        totalBytes += parseFloat(cols[1]) || 0;
+                        totalFiles++;
+                    }
+                }
+
+                document.querySelector('#AuditInfo').textContent =
+                    'Latest audit: ' + date.replace('T', ' ').replace('Z', ' UTC')
+                    + ' — ' + dupOrder.length + ' duplicate episode group(s), ' + totalFiles + ' folder(s) scanned.';
+
+                var dupDiv = document.querySelector('#AuditDups');
+                dupDiv.innerHTML = '';
+                if (dupOrder.length === 0) {
+                    dupDiv.innerHTML = '<div class="fieldDescription">No duplicate episodes found — nice.</div>';
+                } else {
+                    dupOrder.forEach(function (key) {
+                        var parts = key.split('|');
+                        var head = document.createElement('div');
+                        head.style.fontWeight = 'bold';
+                        head.textContent = (parts[0] || '?') + ' S' + (parts[1] || '') + 'E' + (parts[2] || '') + ' — ' + dups[key].length + ' files';
+                        dupDiv.appendChild(head);
+                        dups[key].forEach(function (f) {
+                            var row = document.createElement('div');
+                            row.style.wordBreak = 'break-all';
+                            row.style.marginLeft = '1em';
+                            row.textContent = '• ' + fmtSize(f.size) + ' — ' + f.path;
+                            dupDiv.appendChild(row);
+                        });
+                    });
+                }
+
+                var bigDiv = document.querySelector('#AuditBig');
+                bigDiv.innerHTML = '';
+                if (big.length === 0) {
+                    bigDiv.innerHTML = '<div class="fieldDescription">Nothing found yet.</div>';
+                } else {
+                    big.forEach(function (f) {
+                        var row = document.createElement('div');
+                        row.style.wordBreak = 'break-all';
+                        row.textContent = '• ' + fmtSize(f.size) + ' — ' + f.path;
+                        bigDiv.appendChild(row);
+                    });
+                }
+            }
+
+            document.querySelector('#EpisodeToolsAuditPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.ajax({
+                        type: 'GET',
+                        url: ApiClient.getUrl('EpisodeTools/Audit'),
+                        dataType: 'text'
+                    }).then(function (text) {
+                        render((text || '').split(/\r?\n/));
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function () {
+                        document.querySelector('#AuditInfo').textContent = 'Could not load the audit. Is plugin v2.0.0+ installed?';
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+        })();
+    </script>
+</div>
+</body>
+</html>

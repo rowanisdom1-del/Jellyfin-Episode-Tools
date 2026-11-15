@@ -57,6 +57,32 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the latest library audit report as plain text.
+    /// Lines are tab separated: RUN kind timestamp, DUP key path size, BIG size path, TOTAL size folder.
+    /// </summary>
+    [HttpGet("Audit")]
+    public ActionResult<string> GetAudit()
+    {
+        var baseDir = Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools");
+        var path = Path.Combine(baseDir, "audit-report.txt");
+
+        try
+        {
+            if (!System.IO.File.Exists(path))
+            {
+                return Ok("No audit yet. Run task '7. Audit library' first.");
+            }
+
+            return Ok(System.IO.File.ReadAllText(path, Encoding.UTF8));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Episode Tools] Could not read the audit report.");
+            return StatusCode(500, "Could not read the audit report: " + ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Returns the latest subtitle check report as plain text.
     /// Lines are tab separated: RUN kind timestamp, SUBWARN path message, SUBOK path message,
     /// SUBINFO path message.

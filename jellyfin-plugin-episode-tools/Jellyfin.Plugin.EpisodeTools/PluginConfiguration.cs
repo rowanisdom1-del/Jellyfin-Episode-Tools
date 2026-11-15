@@ -165,6 +165,31 @@ public class PluginConfiguration : BasePluginConfiguration
         set => _dropSignsSongs = value ? "true" : "false";
     }
 
+    // Backing field for the minimum free space requirement.
+    private string _minFreeSpaceGb = "10";
+
+    /// <summary>
+    /// Raw serialized value for MinFreeSpaceGb. Kept as string for tolerant deserialization.
+    /// </summary>
+    [XmlElement("MinFreeSpaceGb")]
+    public string MinFreeSpaceGbRaw
+    {
+        get => _minFreeSpaceGb;
+        set => _minFreeSpaceGb = value ?? "10";
+    }
+
+    /// <summary>
+    /// Gets or sets the minimum free space (in GB) required on the destination before a file is
+    /// converted. Files are skipped with a clear report entry when there is less.
+    /// This accessor is XmlIgnored and falls back to the default when the value is not a number.
+    /// </summary>
+    [XmlIgnore]
+    public int MinFreeSpaceGb
+    {
+        get => int.TryParse(_minFreeSpaceGb, out var n) && n >= 0 ? n : 10;
+        set => _minFreeSpaceGb = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     /// <summary>
     /// Raw serialized value for FaststartOptimize. Kept as string for tolerant deserialization.
     /// The XML element name is preserved.

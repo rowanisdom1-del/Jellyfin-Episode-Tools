@@ -72,6 +72,13 @@ internal static class ScriptRunner
             args.Add("--drop-signs-songs");
         }
 
+        var minFree = cfg.MinFreeSpaceGb;
+        if (minFree > 0)
+        {
+            args.Add("--min-free-gb");
+            args.Add(minFree.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
         if (cfg.ConvertUnusualAudioToAac)
         {
             args.Add("--audio-to-aac");
@@ -195,6 +202,51 @@ internal static class ScriptRunner
         }
 
         return RunAsync(logger, "python3", "subcheck.py", args, total, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the library audit script: duplicate episodes and the largest files, read-only.
+    /// </summary>
+    public static Task RunAuditAsync(ILogger logger, IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        var cfg = GetConfig();
+        var args = new List<string>();
+
+        var reportPath = Path.Combine(
+            Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools"),
+            "audit-report.txt");
+        try
+        {
+            if (File.Exists(reportPath))
+            {
+                File.Delete(reportPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] Could not reset the audit report file.");
+        }
+
+        args.Add("--report");
+        args.Add(reportPath);
+
+        var folders = new List<string>(cfg.EffectiveRenameFolders);
+        foreach (var dir in cfg.EffectiveConvertFolders)
+        {
+            if (!folders.Contains(dir, StringComparer.OrdinalIgnoreCase))
+            {
+                folders.Add(dir);
+            }
+        }
+
+        var total = 0;
+        foreach (var dir in folders)
+        {
+            args.Add(dir);
+            total += CountVideoFiles(dir);
+        }
+
+        return RunAsync(logger, "python3", "audit.py", args, total, progress, cancellationToken);
     }
 
     /// <summary>

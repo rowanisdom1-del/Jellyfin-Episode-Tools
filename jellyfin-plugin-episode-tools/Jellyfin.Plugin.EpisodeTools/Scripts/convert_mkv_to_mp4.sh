@@ -25,6 +25,7 @@ AUDIO_TO_AAC=false
 FASTSTART=true
 DROP_SIGNS_SONGS=false
 REDO=false
+MIN_FREE_GB=10
 REPORT_FILE=""
 PREFS_FILE=""
 FOLDERS=()
@@ -57,6 +58,8 @@ Options:
                        (typical anime tracks) as long as another dialogue track exists.
   --redo               Also convert files whose .mp4 already exists and REPLACE the
                        .mp4 after verification. Use after changing preferences/settings.
+  --min-free-gb N      Require at least N GB free on the destination before converting
+                       a file (default 10). Files below the threshold are skipped.
   -h, --help           Show this help.
 
 Existing MP4s are never overwritten. Text subtitles are converted to mov_text;
@@ -73,6 +76,14 @@ while [[ $# -gt 0 ]]; do
     --no-faststart) FASTSTART=false ;;
     --drop-signs-songs) DROP_SIGNS_SONGS=true ;;
     --redo) REDO=true ;;
+    --min-free-gb)
+      if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
+        echo "--min-free-gb needs a number (see --help)." >&2
+        exit 1
+      fi
+      MIN_FREE_GB=$2
+      shift
+      ;;
     --prefs)
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "--prefs needs a file path (see --help)." >&2
@@ -306,12 +317,20 @@ duration() {
 }
 
 enough_space() {
-  local size avail
+  local size avail floor
   size=$(stat -c %s -- "$1") || return 1
   avail=$(df --output=avail -B1 -- "$(dirname -- "$1")" 2>/dev/null |
     tail -n 1 | tr -d ' ')
   [[ "$avail" =~ ^[0-9]+$ ]] || return 1
-  (( avail > size + size / 20 + 104857600 ))
+  # Enough for this file plus 5%, and never less than the configured minimum free space.
+  floor=$(( size + size / 20 + 104857600 ))
+  if (( MIN_FREE_GB > 0 )); then
+    local min_bytes=$(( MIN_FREE_GB * 1073741824 ))
+    if (( min_bytes > floor )); then
+      floor=$min_bytes
+    fi
+  fi
+  (( avail > floor ))
 }
 
 # Sets REASON and returns nonzero if the output does not pass verification.
@@ -470,12 +489,15 @@ while IFS= read -r -d '' src; do
   fi
 
   # ---- drop signs/songs/lyrics subtitle tracks (keep dialogue) ----
+  # Word-boundary match: "English Subtitles" contains "titles" as a substring but must NOT be
+  # treated as a titles track; only standalone words count.
   if $DROP_SIGNS_SONGS && (( ${#SUB_INDICES[@]} > 1 )); then
     kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
     dropped=""
     for i in "${!SUB_INDICES[@]}"; do
       t="${STITLES[$i]:-}"
-      if [[ "${t,,}" =~ (signs|songs|song|lyrics|karaoke|titles|credits) ]]; then
+      padded=" ${t,,} "
+      if [[ "$padded" =~ [^a-z](signs|songs|song|lyrics|karaoke|titles|credits)[^a-z] ]]; then
         dropped+=" '${t}'"
       else
         kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
@@ -581,8 +603,8 @@ while IFS= read -r -d '' src; do
   fi
 
   if ! enough_space "$src"; then
-    echo "  Skipping: not enough free space for a safe conversion."
-    report "$src" "not enough free space for a safe conversion"
+    echo "  Skipping: not enough free space for a safe conversion (minimum ${MIN_FREE_GB} GB free required)."
+    report "$src" "not enough free space for a safe conversion (minimum ${MIN_FREE_GB} GB free required)"
     skipped=$((skipped + 1))
     continue
   fi

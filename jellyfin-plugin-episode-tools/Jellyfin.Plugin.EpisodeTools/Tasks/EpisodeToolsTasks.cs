@@ -188,6 +188,47 @@ public sealed class SubCheckTask : IScheduledTask
     /// <inheritdoc />
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
+        // Re-check every 3 days; new episodes added in between get caught automatically.
+        return new[]
+        {
+            new TaskTriggerInfo { Type = "IntervalTrigger", IntervalTicks = TimeSpan.FromDays(3).Ticks }
+        };
+    }
+}
+
+/// <summary>Audits the library: duplicate episodes and the largest files. Changes nothing.</summary>
+public sealed class AuditTask : IScheduledTask
+{
+    private readonly ILogger<AuditTask> _logger;
+
+    /// <summary>Initializes a new instance of the <see cref="AuditTask"/> class.</summary>
+    /// <param name="logger">Logger.</param>
+    public AuditTask(ILogger<AuditTask> logger)
+    {
+        _logger = logger;
+    }
+
+    /// <inheritdoc />
+    public string Name => "7. Audit library (duplicates + largest files, changes nothing)";
+
+    /// <inheritdoc />
+    public string Key => "EpisodeToolsAudit";
+
+    /// <inheritdoc />
+    public string Description => "Read-only audit of the series folders: finds video files that parse as the same episode (duplicates) and lists the largest files. Read the result under Dashboard > Plugins > Episode Tools > Episode Tools Audit.";
+
+    /// <inheritdoc />
+    public string Category => "Episode Tools";
+
+    /// <inheritdoc />
+    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        return ScriptRunner.RunAuditAsync(_logger, progress, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
+    {
         return Array.Empty<TaskTriggerInfo>();
     }
 }
