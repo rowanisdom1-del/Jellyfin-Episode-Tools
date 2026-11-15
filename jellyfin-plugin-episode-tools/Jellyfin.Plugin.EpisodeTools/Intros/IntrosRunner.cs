@@ -55,6 +55,7 @@ internal static class IntrosRunner
         RegexOptions.Compiled);
 
     private static readonly object Lock = new();
+    private static Microsoft.Extensions.Logging.ILogger? _loggerForEnumeration;
     private static Task? _running;
     private static CancellationTokenSource? _cancellation;
     private static string _lastMessage = string.Empty;
@@ -239,6 +240,7 @@ internal static class IntrosRunner
         }
 
         // Every video file under every configured show folder, grouped per (show folder, season).
+        _loggerForEnumeration = logger;
         var jobs = EnumerateJobs(folders);
         logger.LogInformation(
             "[Episode Tools] Intro scan: {Jobs} episode(s) enumerated. Folders: {Folders}",
@@ -401,7 +403,12 @@ internal static class IntrosRunner
 
         foreach (var folder in folders)
         {
-            if (folder.Length == 0 || !Directory.Exists(folder))
+            var exists = Directory.Exists(folder);
+            _loggerForEnumeration?.LogInformation(
+                "[Episode Tools] Intro scan folder \"{Folder}\": exists={Exists}",
+                folder,
+                exists);
+            if (!exists)
             {
                 continue;
             }
@@ -414,14 +421,15 @@ internal static class IntrosRunner
                     continue;
                 }
 
-                foreach (var file in SafeEnumerateFiles(showDir))
-                {
-                    var ext = Path.GetExtension(file);
-                    if (!videoExt.Contains(ext))
-                    {
-                        continue;
-                    }
+                var files = SafeEnumerateFiles(showDir).ToList();
+                var videos = files.Where(f => videoExt.Contains(Path.GetExtension(f))).ToList();
+                _loggerForEnumeration?.LogInformation(
+                    "[Episode Tools] Intro scan show \"{Show}\": {Files} file(s), {Videos} video(s).",
+                    show,
+                    files.Count,
+                    videos.Count);
 
+                foreach (var file in videos)
                     var name = Path.GetFileName(file);
                     var m = SeasonRegex.Match(name);
                     var season = m.Success ? $"S{int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture):00}" : "S?";
