@@ -112,9 +112,10 @@ copied into the server's database by the built-in **Extract media segments** tas
 
 Why it is faster than the official Intro Skipper:
 
-- **Only the start of the file is fingerprinted** — intros always live in the first few
-  minutes, so the default window is 4 minutes instead of the whole episode (a 24-minute
-  episode means ~6x less audio to decode; 50-minute files ~12x).
+- **A smaller default window** — intros always live in the first few minutes, so the default
+  window is 4 minutes from the start (configurable 1–15 min). The official Intro Skipper
+  defaults to the first 25% of the file up to 10 minutes, so for typical 20–50 minute
+  episodes this means roughly half to a third of the audio to fingerprint by default.
 - **Parallel decoding** — several episodes are fingerprinted at the same time (default 2,
   up to 8 ffmpeg processes).
 - **Per-file cache** — fingerprints are stored keyed on size + mtime + window, so re-scans
@@ -127,8 +128,10 @@ Why it is faster than the official Intro Skipper:
   end timestamp.
 
 Settings (Settings tab): fingerprint window in minutes, parallelism, shortest/longest intro.
-If the official Intro Skipper plugin is installed too, disable one of the scanners to avoid
-duplicate skip buttons.
+The scanner finds **intros only** (the shared opening at the start of each episode); it does
+not detect credits, commercials, previews or recaps — if you need those, use the official
+Intro Skipper, which covers every media segment type. If you run both plugins, disable one
+of the two intro scanners to avoid duplicate skip buttons.
 
 ## Version history
 
