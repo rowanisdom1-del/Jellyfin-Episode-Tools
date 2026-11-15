@@ -63,12 +63,12 @@ as an artifact. To publish a release, push a tag:
 git tag v2.0.0 && git push origin v2.0.0
 ```
 
-The workflow attaches `EpisodeTools_2.0.0.0.zip` to the release. Download from the
+The workflow attaches `EpisodeTools_2.0.1.0.zip` to the release. Download from the
 [Releases page](../../releases).
 
 ## Install
 
-**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_2.0.0.0/`
+**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_2.0.1.0/`
 (the DLL must sit directly in that folder) and restart the container. The container needs
 `python3` for the rename/audit tasks — the official Jellyfin image has ffmpeg bundled.
 
@@ -76,10 +76,10 @@ The workflow attaches `EpisodeTools_2.0.0.0.zip` to the release. Download from t
 
 ```bash
 sudo apt install unzip acl
-wget https://github.com/<your-user>/<your-repo>/releases/download/v2.0.0/EpisodeTools_2.0.0.0.zip
-sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_2.0.0.0
-sudo unzip -o EpisodeTools_2.0.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_2.0.0.0
-sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_2.0.0.0
+wget https://github.com/<your-user>/<your-repo>/releases/download/v2.0.1/EpisodeTools_2.0.1.0.zip
+sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_2.0.1.0
+sudo unzip -o EpisodeTools_2.0.1.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_2.0.1.0
+sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_2.0.1.0
 sudo setfacl -R -m u:jellyfin:rwX /mnt/storage/media
 sudo setfacl -R -d -m u:jellyfin:rwX /mnt/storage/media
 sudo systemctl restart jellyfin
@@ -98,6 +98,7 @@ sudo systemctl restart jellyfin
 
 ## Version history
 
+- **2.0.1** — subtitle filter fallback fix, .ass parser fix, verify isolation, audit root-file fix.
 - **2.0.0** — library audit (duplicates + largest files), minimum-free-space guard, sub
   check auto-schedule, fixed signs/songs filter matching "subtitles", fixed .ass parsing,
   safer track extraction.
