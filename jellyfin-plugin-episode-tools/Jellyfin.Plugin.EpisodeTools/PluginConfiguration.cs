@@ -136,6 +136,41 @@ public class PluginConfiguration : BasePluginConfiguration
     private string _convertUnusualAudioToAac;
     private string _faststartOptimize = "true";
     private string _dropSignsSongs = "true";
+    private string _dropGarbageSubs = "true";
+
+    /// <summary>
+    /// Raw serialized value for DropGarbageSubs. Kept as string for tolerant deserialization.
+    /// The XML element name is preserved.
+    /// </summary>
+    [XmlElement("DropGarbageSubs")]
+    public string DropGarbageSubsRaw
+    {
+        get => _dropGarbageSubs;
+        set => _dropGarbageSubs = value ?? "true";
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether subtitle tracks whose content is mostly garbage
+    /// (pure numbers, ad/spam lines, OCR junk) are dropped during conversion when a better track
+    /// exists. Requires python3 on the server; skipped silently when it is missing.
+    /// This boolean accessor is XmlIgnored and parses many common textual representations.
+    /// </summary>
+    [XmlIgnore]
+    public bool DropGarbageSubs
+    {
+        get
+        {
+            var s = (_dropGarbageSubs ?? "true").Trim().ToLowerInvariant();
+            return !(s == "false" || s == "0" || s == "no" || s == "n" || s == "off");
+        }
+        set => _dropGarbageSubs = value ? "true" : "false";
+    }
+
+    /// <summary>
+    /// Gets or sets an optional webhook URL that receives a POST request when a convert run
+    /// finishes (apply mode only). Empty disables it. Useful with ntfy.sh or similar.
+    /// </summary>
+    public string NotifyWebhookUrl { get; set; } = string.Empty;
 
     /// <summary>
     /// Raw serialized value for DropSignsSongs. Kept as string for tolerant deserialization.

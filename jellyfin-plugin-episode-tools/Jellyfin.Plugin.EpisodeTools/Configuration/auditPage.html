@@ -11,6 +11,9 @@
             <h2>Episode Tools — Library Audit</h2>
             <p>Result of the latest <b>7. Audit library</b> task: duplicate episodes (same show, season
             and episode in more than one file) and the largest video files — handy when space runs out.</p>
+            <div style="margin-bottom:1em;">
+                <input id="AuditFilter" type="text" is="emby-input" style="width:60%;" placeholder="Filter by show or file name…" />
+            </div>
             <div id="AuditInfo" class="fieldDescription" style="margin-bottom:1em;"></div>
 
             <h3 style="margin-bottom:0.5em;">Duplicate episodes</h3>
@@ -22,6 +25,40 @@
     </div>
     <script type="text/javascript">
         (function () {
+            var allDups = [];  // {key, files:[{path,size}], el}
+
+            function applyFilter() {
+                var q = (document.querySelector('#AuditFilter').value || '').toLowerCase();
+                allDups.forEach(function (g) {
+                    var match = !q || g.key.toLowerCase().indexOf(q) !== -1 ||
+                        g.files.some(function (f) { return f.path.toLowerCase().indexOf(q) !== -1; });
+                    g.el.style.display = match ? '' : 'none';
+                });
+            }
+            window.__auditApplyFilter = applyFilter;
+
+            function resolve(key, action, groupEl) {
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/AuditAction'),
+                    dataType: 'text',
+                    data: JSON.stringify({ key: key, action: action }),
+                    contentType: 'application/json'
+                }).then(function (text) {
+                    var res = JSON.parse(text || '{}');
+                    var note = document.createElement('div');
+                    note.className = 'fieldDescription';
+                    note.style.marginLeft = '1em';
+                    note.textContent = 'Resolved: kept ' + (res.kept || '').split('/').pop()
+                        + (res.removed ? ', removed ' + res.removed.length + ' file(s)' : '')
+                        + (res.errors && res.errors.length ? ', ' + res.errors.length + ' error(s)' : '')
+                        + (res.trash ? ' (trash: ' + res.trash + ')' : '');
+                    groupEl.appendChild(note);
+                    groupEl.querySelectorAll('button, select').forEach(function (el) { el.disabled = true; });
+                }).catch(function () {
+                    alert('Resolving failed — see Dashboard > Logs.');
+                });
+            }
             function fmtSize(bytes) {
                 var units = ['B', 'KB', 'MB', 'GB', 'TB'];
                 var n = parseFloat(bytes) || 0, u = 0;
@@ -55,6 +92,7 @@
 
                 var dupDiv = document.querySelector('#AuditDups');
                 dupDiv.innerHTML = '';
+                allDups = [];
                 if (dupOrder.length === 0) {
                     dupDiv.innerHTML = '<div class="fieldDescription">No duplicate episodes found — nice.</div>';
                 } else {
@@ -71,6 +109,31 @@
                             row.textContent = '• ' + fmtSize(f.size) + ' — ' + f.path;
                             dupDiv.appendChild(row);
                         });
+
+                        var actions = document.createElement('div');
+                        actions.style.marginLeft = '1em';
+                        actions.style.marginBottom = '1em';
+                        var sel = document.createElement('select');
+                        sel.className = 'selectEpisodeTools';
+                        [['keep-largest', 'Keep largest, archive others'], ['keep-newest', 'Keep newest, archive others'], ['delete-others', 'Keep largest, DELETE others']].forEach(function (o) {
+                            var opt = document.createElement('option');
+                            opt.value = o[0];
+                            opt.textContent = o[1];
+                            sel.appendChild(opt);
+                        });
+                        var go = document.createElement('button');
+                        go.setAttribute('is', 'emby-button');
+                        go.className = 'raised button-mini emby-button';
+                        go.textContent = 'Resolve';
+                        var groupEl = document.createElement('div');
+                        groupEl.appendChild(sel);
+                        groupEl.appendChild(go);
+                        dupDiv.appendChild(groupEl);
+                        go.addEventListener('click', function () {
+                            if (sel.value === 'delete-others' && !confirm('Delete the smaller files permanently?')) return;
+                            resolve(key, sel.value, groupEl);
+                        });
+                        allDups.push({ key: key, files: dups[key], el: groupEl });
                     });
                 }
 
@@ -96,7 +159,9 @@
                         url: ApiClient.getUrl('EpisodeTools/Audit'),
                         dataType: 'text'
                     }).then(function (text) {
+                        allDups = [];
                         render((text || '').split(/\r?\n/));
+                        if (window.__auditApplyFilter) { window.__auditApplyFilter(); }
                         Dashboard.hideLoadingMsg();
                     }).catch(function () {
                         document.querySelector('#AuditInfo').textContent = 'Could not load the audit. Is plugin v2.0.0+ installed?';
@@ -104,6 +169,9 @@
                     });
                 });
         })();
+        document.addEventListener('input', function (e) {
+            if (e.target && e.target.id === 'AuditFilter' && window.__auditApplyFilter) { window.__auditApplyFilter(); }
+        });
     </script>
 </div>
 </body>

@@ -147,6 +147,7 @@ public class EpisodeToolsReportController : ControllerBase
 
         var shows = new List<ShowRow>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var scanned = 0;
 
         foreach (var folder in folders)
         {
@@ -155,6 +156,7 @@ public class EpisodeToolsReportController : ControllerBase
                 continue;
             }
 
+            scanned++;
             foreach (var showDir in Directory.EnumerateDirectories(folder, "*", options))
             {
                 var name = Path.GetFileName(showDir);
@@ -190,14 +192,14 @@ public class EpisodeToolsReportController : ControllerBase
                     }
                 }
 
-                shows.Add(new ShowRow(name, episodes, mkv, langs));
+                shows.Add(new ShowRow(name, episodes, mkv, langs, showDir));
             }
         }
 
         shows.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
 
         var json = JsonSerializer.Serialize(
-            new { foldersScanned = folders.Count(f => f.Length > 0 && Directory.Exists(f)), shows },
+            new { foldersScanned = scanned, shows },
             new JsonSerializerOptions
             {
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -222,7 +224,8 @@ public class EpisodeToolsReportController : ControllerBase
         {
             show = p.Show,
             sub = p.SubtitleLanguage,
-            aud = p.AudioLanguage
+            aud = p.AudioLanguage,
+            aud2 = p.AudioFallback
         });
 
         return Ok(JsonSerializer.Serialize(new { prefs }));
@@ -249,26 +252,28 @@ public class EpisodeToolsReportController : ControllerBase
 
         var sub = (body.Sub ?? string.Empty).Trim().ToLowerInvariant();
         var aud = (body.Aud ?? string.Empty).Trim().ToLowerInvariant();
+        var audFallback = (body.Aud2 ?? string.Empty).Trim().ToLowerInvariant();
         if (sub is not ("" or "none") && sub.Length > 3)
         {
             return BadRequest("Subtitle language must be empty, 'none', or a 2-3 letter code.");
         }
 
-        if (aud.Length > 3)
+        if (aud.Length > 3 || audFallback.Length > 3)
         {
-            return BadRequest("Audio language must be empty or a 2-3 letter code.");
+            return BadRequest("Audio languages must be empty or a 2-3 letter code.");
         }
 
         var list = cfg.Configuration.ShowPreferences;
         var existing = list.FirstOrDefault(p => string.Equals(p.Show, show, StringComparison.OrdinalIgnoreCase));
         if (existing is null)
         {
-            list.Add(new ShowPreference(show, sub, aud));
+            list.Add(new ShowPreference(show, sub, aud, audFallback));
         }
         else
         {
             existing.SubtitleLanguage = sub;
             existing.AudioLanguage = aud;
+            existing.AudioFallback = audFallback;
         }
 
         cfg.SaveConfiguration();
@@ -294,7 +299,183 @@ public class EpisodeToolsReportController : ControllerBase
         }
     }
 
-    private sealed record ShowRow(string Name, int Episodes, int Mkv, List<string> SubLangs);
+    /// <summary>
+    /// Starts a conversion of a single show folder in the background. Body: {folder}.
+    /// Returns 409 when a run is already active.
+    /// </summary>
+    [HttpPost("ConvertShow")]
+    public IActionResult ConvertShow([FromBody] ConvertShowBody body)
+    {
+        var folder = (body.Folder ?? string.Empty).Trim();
+        var cfg = Plugin.Instance?.Configuration;
+        if (cfg is null)
+        {
+            return StatusCode(500, "Plugin not initialized.");
+        }
+
+        // The folder must exist and sit under one of the configured series/scan folders.
+        var allowed = new List<string>(cfg.EffectiveRenameFolders);
+        allowed.AddRange(cfg.EffectiveConvertFolders);
+        var ok = false;
+        foreach (var root in allowed)
+        {
+            if (root.Length > 0 && folder.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase) && Directory.Exists(folder))
+            {
+                ok = true;
+                break;
+            }
+        }
+
+        if (!ok)
+        {
+            return BadRequest("Folder is not under a configured series/scan folder.");
+        }
+
+        if (!ShowConvertRunner.TryStart(folder, _logger))
+        {
+            return StatusCode(409, "A conversion is already running.");
+        }
+
+        _logger.LogInformation("[Episode Tools] Per-show conversion started for {Folder}.", folder);
+        return Ok("started");
+    }
+
+    /// <summary>
+    /// Returns the state of the background per-show conversion.
+    /// </summary>
+    [HttpGet("ConvertStatus")]
+    public IActionResult ConvertStatus()
+    {
+        return Ok(System.Text.Json.JsonSerializer.Serialize(ShowConvertRunner.Status()));
+    }
+
+    /// <summary>
+    /// Resolves one duplicate group from the latest audit. Body: {key, action} where action is
+    /// "keep-largest", "keep-newest" (others archived to the plugin trash folder) or
+    /// "delete-others" (permanent). Only files listed in the audit are touched.
+    /// </summary>
+    [HttpPost("AuditAction")]
+    public IActionResult AuditAction([FromBody] AuditActionBody body)
+    {
+        var key = (body.Key ?? string.Empty).Trim();
+        var action = (body.Action ?? string.Empty).Trim().ToLowerInvariant();
+        if (key.Length == 0 || action is not ("keep-largest" or "keep-newest" or "delete-others"))
+        {
+            return BadRequest("Unknown key or action.");
+        }
+
+        var cfg = Plugin.Instance?.Configuration;
+        if (cfg is null)
+        {
+            return StatusCode(500, "Plugin not initialized.");
+        }
+
+        var allowed = new List<string>(cfg.EffectiveRenameFolders);
+        allowed.AddRange(cfg.EffectiveConvertFolders);
+
+        // Read the group out of the audit report.
+        var baseDir = Plugin.Instance.WorkFolder;
+        var reportPath = Path.Combine(baseDir, "audit-report.txt");
+        if (!System.IO.File.Exists(reportPath))
+        {
+            return NotFound("No audit report yet.");
+        }
+
+        var files = new List<(string Path, long Size)>();
+        foreach (var line in System.IO.File.ReadLines(reportPath))
+        {
+            var cols = line.Split('\t');
+            if (cols.Length >= 4 && cols[0] == "DUP" && string.Equals(cols[1], key, StringComparison.OrdinalIgnoreCase)
+                && long.TryParse(cols[3], out var size))
+            {
+                files.Add((cols[2], size));
+            }
+        }
+
+        if (files.Count < 2)
+        {
+            return NotFound("That duplicate group is not in the latest audit report.");
+        }
+
+        // Only touch files that live under the configured folders.
+        files = files.Where(f => allowed.Any(root => root.Length > 0 &&
+            f.Path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase))).ToList();
+        if (files.Count < 2)
+        {
+            return BadRequest("None of the group's files are under the configured folders.");
+        }
+
+        string keep;
+        if (action == "keep-newest")
+        {
+            keep = files.OrderByDescending(f => SafeLastWrite(f.Path)).First().Path;
+        }
+        else
+        {
+            keep = files.OrderByDescending(f => f.Size).First().Path;
+        }
+
+        var trashDir = Path.Combine(baseDir, "trash", key.Replace("|", "_"));
+        Directory.CreateDirectory(trashDir);
+        var removed = new List<string>();
+        var errors = new List<string>();
+        foreach (var (path, _) in files)
+        {
+            if (string.Equals(path, keep, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (!System.IO.File.Exists(path))
+                {
+                    continue;
+                }
+
+                if (action == "delete-others")
+                {
+                    System.IO.File.Delete(path);
+                }
+                else
+                {
+                    System.IO.File.Move(path, Path.Combine(trashDir, Path.GetFileName(path)), overwrite: true);
+                }
+
+                removed.Add(path);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{path}: {ex.Message}");
+                _logger.LogWarning(ex, "[Episode Tools] Could not remove duplicate {Path}.", path);
+            }
+        }
+
+        _logger.LogInformation(
+            "[Episode Tools] Duplicate group {Key}: kept {Keep}, removed {Count} file(s).",
+            key, keep, removed.Count);
+        return Ok(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            kept = keep,
+            removed,
+            errors,
+            trash = action == "delete-others" ? null : trashDir
+        }));
+    }
+
+    private static DateTime SafeLastWrite(string path)
+    {
+        try
+        {
+            return System.IO.File.GetLastWriteTimeUtc(path);
+        }
+        catch (Exception)
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    private sealed record ShowRow(string Name, int Episodes, int Mkv, List<string> SubLangs, string Folder);
 
     /// <summary>Request body for SetShowPrefs.</summary>
     public sealed class ShowPrefBody
@@ -310,5 +491,29 @@ public class EpisodeToolsReportController : ControllerBase
         /// <summary>Gets or sets the audio language: "" or a language code.</summary>
         [JsonPropertyName("aud")]
         public string? Aud { get; set; }
+
+        /// <summary>Gets or sets the fallback audio language: "" or a language code.</summary>
+        [JsonPropertyName("aud2")]
+        public string? Aud2 { get; set; }
+    }
+
+    /// <summary>Request body for ConvertShow.</summary>
+    public sealed class ConvertShowBody
+    {
+        /// <summary>Gets or sets the absolute show folder to convert.</summary>
+        [JsonPropertyName("folder")]
+        public string? Folder { get; set; }
+    }
+
+    /// <summary>Request body for AuditAction.</summary>
+    public sealed class AuditActionBody
+    {
+        /// <summary>Gets or sets the duplicate group key from the audit report.</summary>
+        [JsonPropertyName("key")]
+        public string? Key { get; set; }
+
+        /// <summary>Gets or sets the action: keep-largest, keep-newest or delete-others.</summary>
+        [JsonPropertyName("action")]
+        public string? Action { get; set; }
     }
 }

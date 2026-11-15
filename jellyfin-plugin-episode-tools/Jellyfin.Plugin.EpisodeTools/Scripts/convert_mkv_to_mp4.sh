@@ -24,6 +24,7 @@ FORCE=false
 AUDIO_TO_AAC=false
 FASTSTART=true
 DROP_SIGNS_SONGS=false
+DROP_GARBAGE_SUBS=false
 REDO=false
 MIN_FREE_GB=10
 REPORT_FILE=""
@@ -56,6 +57,9 @@ Options:
                        Empty language = keep all; "none" subtitles = drop them.
   --drop-signs-songs   Drop subtitle tracks whose title says signs/songs/lyrics/karaoke
                        (typical anime tracks) as long as another dialogue track exists.
+  --drop-garbage-subS  Drop subtitle tracks whose content is mostly garbage (numbers,
+                       ads, spam lines) when a better track exists. Requires python3;
+                       skipped silently when python3 is missing.
   --redo               Also convert files whose .mp4 already exists and REPLACE the
                        .mp4 after verification. Use after changing preferences/settings.
   --min-free-gb N      Require at least N GB free on the destination before converting
@@ -75,6 +79,7 @@ while [[ $# -gt 0 ]]; do
     --audio-to-aac) AUDIO_TO_AAC=true ;;
     --no-faststart) FASTSTART=false ;;
     --drop-signs-songs) DROP_SIGNS_SONGS=true ;;
+    --drop-garbage-subs) DROP_GARBAGE_SUBS=true ;;
     --redo) REDO=true ;;
     --min-free-gb)
       if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
@@ -142,11 +147,11 @@ report() {
 }
 
 # ---- per-show subtitle/audio preferences (Episode Tools Shows page) ----
-PREF_SHOW=(); PREF_SUB=(); PREF_AUD=()
+PREF_SHOW=(); PREF_SUB=(); PREF_AUD=(); PREF_AUDFB=()
 if [[ -n "$PREFS_FILE" && -f "$PREFS_FILE" ]]; then
-  while IFS=$'\t' read -r s sub aud; do
+  while IFS=$'\t' read -r s sub aud audfb; do
     [[ -n "$s" ]] || continue
-    PREF_SHOW+=("$s"); PREF_SUB+=("${sub:-}"); PREF_AUD+=("${aud:-}")
+    PREF_SHOW+=("$s"); PREF_SUB+=("${sub:-}"); PREF_AUD+=("${aud:-}"); PREF_AUDFB+=("${audfb:-}")
   done < "$PREFS_FILE"
 fi
 
@@ -163,28 +168,36 @@ zh:zho|zh:chi|pt:por|ru:rus|sv:swe|pl:pol|tr:tur|ar:ara) return 0 ;;
   return 1
 }
 
-# get_show_pref <show-name>: sets SUBPREF and AUDPREF (empty = keep all).
+# get_show_pref <show-name>: sets SUBPREF, AUDPREF and AUDPREF2 (empty = keep all).
 get_show_pref() {
   SUBPREF=""
   AUDPREF=""
+  AUDPREF2=""
   local want="${1,,}" i
   for i in "${!PREF_SHOW[@]}"; do
     if [[ "${PREF_SHOW[$i],,}" == "$want" ]]; then
       SUBPREF="${PREF_SUB[$i]:-}"
       AUDPREF="${PREF_AUD[$i]:-}"
+      AUDPREF2="${PREF_AUDFB[$i]:-}"
       return 0
     fi
   done
 }
 
 # show_name_for <file-path>: the show is the first folder under the scanned folder.
+# When the scanned folder IS the show folder (per-show conversion), the folder name is the show.
 show_name_for() {
   local p=$1 base rel
   for base in "${FOLDERS[@]}"; do
     base="${base%/}/"
     if [[ "$p/" == "$base"* ]]; then
       rel="${p#"$base"}"
-      printf '%s' "${rel%%/*}"
+      if [[ "$rel" == */* ]]; then
+        printf '%s' "${rel%%/*}"
+      else
+        # File directly inside the scanned folder: the folder itself is the show.
+        printf '%s' "$(basename "${base%/}")"
+      fi
       return 0
     fi
   done
@@ -525,15 +538,19 @@ while IFS= read -r -d '' src; do
   fi
 
   if [[ -n "$AUDPREF" ]]; then
-    new_audio_maps=(); new_acodecs=(); new_achannels=(); new_unsafe=""; kept=0
-    for i in "${!AUDIO_INDICES[@]}"; do
-      if lang_matches "${ALANGS[$i]}" "$AUDPREF"; then
-        new_audio_maps+=(-map "0:${AUDIO_INDICES[$i]}")
-        new_acodecs+=("${ACODECS[$i]}")
-        new_achannels+=("${ACHANNELS[$i]}")
-        kept=$((kept + 1))
-      fi
-    done
+    pick_audio() {  # $1 = preferred language; sets the new_* arrays when matches exist
+      new_audio_maps=(); new_acodecs=(); new_achannels=(); kept=0
+      for i in "${!AUDIO_INDICES[@]}"; do
+        if lang_matches "${ALANGS[$i]}" "$1"; then
+          new_audio_maps+=(-map "0:${AUDIO_INDICES[$i]}")
+          new_acodecs+=("${ACODECS[$i]}")
+          new_achannels+=("${ACHANNELS[$i]}")
+          kept=$((kept + 1))
+        fi
+      done
+    }
+
+    pick_audio "$AUDPREF"
     if (( kept > 0 )); then
       AUDIO_MAPS=("${new_audio_maps[@]}")
       ACODECS=("${new_acodecs[@]}")
@@ -541,10 +558,97 @@ while IFS= read -r -d '' src; do
       ACOUNT=$kept
       echo "  Show preference ($show): keeping only '$AUDPREF' audio ($kept track(s))."
       set_default_disposition=true
+    elif [[ -n "$AUDPREF2" ]]; then
+      pick_audio "$AUDPREF2"
+      if (( kept > 0 )); then
+        AUDIO_MAPS=("${new_audio_maps[@]}")
+        ACODECS=("${new_acodecs[@]}")
+        ACHANNELS=("${new_achannels[@]}")
+        ACOUNT=$kept
+        echo "  Show preference ($show): no '$AUDPREF' audio; falling back to '$AUDPREF2' ($kept track(s))."
+        set_default_disposition=true
+      else
+        echo "  Show preference ($show): no '$AUDPREF' or '$AUDPREF2' audio found; keeping all audio."
+      fi
     else
       echo "  Show preference ($show): no '$AUDPREF' audio track found; keeping all audio."
     fi
   fi
+
+# ---- drop garbage subtitle tracks (numbers/ads/spam content) ----
+# Uses python3 for the content analysis; without python3 the feature is skipped silently.
+if $DROP_GARBAGE_SUBS && command -v python3 >/dev/null 2>&1 && (( ${#SUB_INDICES[@]} > 1 )); then
+  garbage_tmp=$(mktemp --suffix=.srt)
+  kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
+  dropped=""
+  for i in "${!SUB_INDICES[@]}"; do
+    if ffmpeg -v error -y -i "$src" -map "0:s:$i" -f srt "$garbage_tmp" 2>/dev/null; then
+      ratio=$(python3 - "$garbage_tmp" <<'PYEOF'
+import re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+except OSError:
+    print("ERR"); raise SystemExit
+blocks = re.split(r"\n\s*\n", text)
+cues = 0
+bad = 0
+AD = re.compile(r"opensubtitles|subtitles? (by|from)|addic7ed|rarbg|sync (by|and corrected)|release.?group|_subs_|subs please", re.I)
+for block in blocks:
+    lines = [l for l in block.splitlines() if l.strip()]
+    if len(lines) < 2:
+        continue
+    t_idx = next((i for i, l in enumerate(lines) if "-->" in l), None)
+    if t_idx is None:
+        continue
+    body = " ".join(lines[t_idx + 1:])
+    if not body.strip():
+        continue
+    cues += 1
+    garbage = False
+    if re.fullmatch(r"[\d\s.:,%-]+", body):
+        garbage = True                      # pure numbers/punctuation
+    elif AD.search(body):
+        garbage = True                      # ad/spam lines
+    else:
+        alpha = sum(c.isalpha() for c in body)
+        if len(body) >= 8 and alpha / max(len(body), 1) < 0.3:
+            garbage = True                  # mostly non-letters: OCR junk
+        else:
+            words = [w for w in re.findall(r"[A-Za-z]{4,}", body)]
+            if len(words) >= 3 and sum(1 for w in words if not re.search(r"[aeiouyAEIOUY]", w)) / len(words) > 0.6:
+                garbage = True              # long vowel-less words: OCR gibberish
+    if garbage:
+        bad += 1
+print(f"{bad / cues:.2f}" if cues >= 10 else "OK")
+PYEOF
+)
+      if [[ "$ratio" =~ ^0?\.[3-9]$|^1$|^0\.[3-9][0-9]?$ ]]; then
+        dropped+=" '${STITLES[$i]:-track $i}' (${ratio} garbage)"
+      else
+        kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
+        kept_sub_indices+=("${SUB_INDICES[$i]}")
+        kept_sub_langs+=("${SLANGS[$i]}")
+        kept_sub_titles+=("${STITLES[$i]:-}")
+      fi
+    else
+      kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
+      kept_sub_indices+=("${SUB_INDICES[$i]}")
+      kept_sub_langs+=("${SLANGS[$i]}")
+      kept_sub_titles+=("${STITLES[$i]:-}")
+    fi
+  done
+  rm -f -- "$garbage_tmp"
+  if [[ -n "$dropped" ]] && (( ${#kept_sub_maps[@]} > 0 )); then
+    SUB_MAPS=("${kept_sub_maps[@]}")
+    SUB_INDICES=("${kept_sub_indices[@]}")
+    SLANGS=("${kept_sub_langs[@]}")
+    STITLES=("${kept_sub_titles[@]}")
+    SUBCOUNT=${#SUB_INDICES[@]}
+    echo "  Dropping garbage subtitle track(s):$dropped"
+  elif [[ -n "$dropped" ]]; then
+    echo "  Note: every subtitle track looks like garbage; keeping them all."
+  fi
+fi
 
   unsafe=""
   for codec in "${VCODECS[@]}"; do

@@ -12,6 +12,10 @@
             <p>Result of the latest <b>5. Check subtitles</b> task: every episode whose subtitles
             look wrong (signs/songs/lyrics tracks flagged as default, lyrics-heavy content, timing
             that flashes for ~0.5s) and why.</p>
+            <div style="margin-bottom:1em;">
+                <input id="SubCheckFilter" type="text" is="emby-input" style="width:60%;" placeholder="Filter by show or file name…" />
+                <label style="margin-left:1em;"><input type="checkbox" id="SubCheckOnlyProblems" /> only problems</label>
+            </div>
             <div id="SubCheckInfo" class="fieldDescription" style="margin-bottom:1em;"></div>
             <table class="tblDataTable detailTable" style="width:100%;">
                 <thead>
@@ -33,6 +37,25 @@
     </div>
     <script type="text/javascript">
         (function () {
+            var allRows = [];  // {path, findings[], hasWarn}
+
+            function applyFilter() {
+                var q = (document.querySelector('#SubCheckFilter').value || '').toLowerCase();
+                var onlyProblems = document.querySelector('#SubCheckOnlyProblems').checked;
+                var body = document.querySelector('#SubCheckBody');
+                body.innerHTML = '';
+                var shown = 0;
+                allRows.forEach(function (row) {
+                    if (onlyProblems && !row.hasWarn) return;
+                    if (q && row.path.toLowerCase().indexOf(q) === -1) return;
+                    shown++;
+                    body.appendChild(row.el);
+                });
+                if (shown === 0 && allRows.length > 0) {
+                    body.innerHTML = '<tr><td colspan="2">Nothing matches the filter.</td></tr>';
+                }
+            }
+            window.__subcheckApplyFilter = applyFilter;
             function render(lines) {
                 var body = document.querySelector('#SubCheckBody');
                 var info = document.querySelector('#SubCheckInfo');
@@ -74,6 +97,7 @@
                     });
                     tr.appendChild(tdMsg);
                     body.appendChild(tr);
+                    allRows.push({ path: p, findings: findings, hasWarn: hasWarn, el: tr });
                 });
 
                 info.textContent = 'Latest check: ' + date.replace('T', ' ').replace('Z', ' UTC')
@@ -91,7 +115,9 @@
                         url: ApiClient.getUrl('EpisodeTools/SubCheck'),
                         dataType: 'text'
                     }).then(function (text) {
+                        allRows = [];
                         render((text || '').split(/\r?\n/));
+                        applyFilter();
                         Dashboard.hideLoadingMsg();
                     }).catch(function () {
                         document.querySelector('#SubCheckBody').innerHTML =
@@ -100,6 +126,20 @@
                     });
                 });
         })();
+
+        // Wire the filter controls once (they live outside the re-rendered table).
+        document.addEventListener('input', function (e) {
+            if (e.target && e.target.id === 'SubCheckFilter') { trySubFilter(); }
+        });
+        document.addEventListener('change', function (e) {
+            if (e.target && e.target.id === 'SubCheckOnlyProblems') { trySubFilter(); }
+        });
+        document.addEventListener('input', function (e) {
+            if (e.target && e.target.id === 'SubCheckFilter' && window.__subcheckApplyFilter) { window.__subcheckApplyFilter(); }
+        });
+        document.addEventListener('change', function (e) {
+            if (e.target && e.target.id === 'SubCheckOnlyProblems' && window.__subcheckApplyFilter) { window.__subcheckApplyFilter(); }
+        });
     </script>
 </div>
 </body>

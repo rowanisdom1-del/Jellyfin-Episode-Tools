@@ -12,6 +12,7 @@
             <p>Every show found in your series/scan folders. Choose the <b>default subtitle language</b> and
             <b>default audio language</b> per show. These apply the next time that show is converted:
             matching tracks are kept and flagged as the default for players.</p>
+            <div id="ConvertStatus" style="display:none;margin-bottom:1em;font-weight:bold;"></div>
             <div id="ShowsInfo" class="fieldDescription" style="margin-bottom:1em;"></div>
             <table class="tblDataTable detailTable" style="width:100%;">
                 <thead>
@@ -22,11 +23,13 @@
                         <th>Subs found</th>
                         <th style="text-align:left;">Default subtitles</th>
                         <th style="text-align:left;">Default audio</th>
+                        <th style="text-align:left;">Audio fallback</th>
+                        <th style="text-align:left;">Save</th>
                         <th></th>
                     </tr>
                 </thead>
                 <tbody id="ShowsBody">
-                    <tr><td colspan="7">Loading…</td></tr>
+                    <tr><td colspan="9">Loading…</td></tr>
                 </tbody>
             </table>
         </div>
@@ -79,6 +82,23 @@
                     btn.textContent = 'Failed ✗';
                     setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 2500);
                 });
+            }
+
+            var statusTimer = null;
+            function pollStatus() {
+                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/ConvertStatus'), dataType: 'json' })
+                    .then(function (st) {
+                        var el = document.querySelector('#ConvertStatus');
+                        if (st.running) {
+                            el.textContent = 'Converting: ' + (st.folder || '').split('/').pop() + ' — ' + (st.message || '');
+                            el.style.display = 'block';
+                            if (!statusTimer) { statusTimer = setInterval(pollStatus, 3000); }
+                        } else {
+                            el.textContent = st.result ? ('Last per-show run: ' + st.result) : '';
+                            if (!st.result) { el.style.display = 'none'; }
+                            if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+                        }
+                    }).catch(function () {});
             }
 
             document.querySelector('#EpisodeToolsShowsPage')
@@ -139,27 +159,47 @@
                             tdAud.appendChild(selAud);
                             tr.appendChild(tdAud);
 
+                            var tdAud2 = document.createElement('td');
+                            var selAud2 = document.createElement('select');
+                            selAud2.className = 'selectEpisodeTools';
+                            fillSelect(selAud2, AUD_FALLBACK_OPTIONS, saved.aud2);
+                            tdAud2.appendChild(selAud2);
+                            tr.appendChild(tdAud2);
+
                             var tdBtn = document.createElement('td');
                             var btn = document.createElement('button');
                             btn.setAttribute('is', 'emby-button');
                             btn.className = 'raised button-mini emby-button';
                             btn.textContent = saved.sub || saved.aud ? 'Update' : 'Save';
                             btn.addEventListener('click', function () {
-                                savePref(s.name, selSub.value, selAud.value, btn);
+                                savePref(s.name, selSub.value, selAud.value, selAud2.value, btn);
                             });
                             tdBtn.appendChild(btn);
                             tr.appendChild(tdBtn);
+
+                            var tdConv = document.createElement('td');
+                            var convBtn = document.createElement('button');
+                            convBtn.setAttribute('is', 'emby-button');
+                            convBtn.className = 'raised button-mini emby-button';
+                            convBtn.textContent = 'Convert';
+                            convBtn.title = 'Convert this show now (remuxes its .mkv files with the current settings)';
+                            convBtn.addEventListener('click', function () {
+                                convertShow(s.folder || '', convBtn);
+                            });
+                            tdConv.appendChild(convBtn);
+                            tr.appendChild(tdConv);
 
                             body.appendChild(tr);
                         });
 
                         if (shows.length === 0) {
-                            body.innerHTML = '<tr><td colspan="7">No shows found — check the folders on the Episode Tools settings page.</td></tr>';
+                            body.innerHTML = '<tr><td colspan="9">No shows found — check the folders on the Episode Tools settings page.</td></tr>';
                         }
+                        pollStatus();
                         Dashboard.hideLoadingMsg();
                     }).catch(function () {
                         document.querySelector('#ShowsBody').innerHTML =
-                            '<tr><td colspan="7">Could not load the shows. Is plugin v1.4.0+ installed?</td></tr>';
+                            '<tr><td colspan="9">Could not load the shows. Is plugin v2.2.0+ installed?</td></tr>';
                         Dashboard.hideLoadingMsg();
                     });
                 });

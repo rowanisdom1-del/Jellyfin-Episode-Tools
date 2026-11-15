@@ -4,7 +4,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -45,9 +47,10 @@ internal static class ScriptRunner
     /// <summary>
     /// Runs the MKV to MP4 script over every configured scan folder. Without <paramref name="apply"/>
     /// it only lists what would be converted. With <paramref name="redo"/> it also re-converts files
-    /// whose .mp4 already exists, replacing it after verification.
+    /// whose .mp4 already exists, replacing it after verification. With <paramref name="folderOverride"/>
+    /// only that single folder is scanned (per-show conversion from the Shows page).
     /// </summary>
-    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false)
+    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null)
     {
         var cfg = GetConfig();
         var args = new List<string>();
@@ -70,6 +73,11 @@ internal static class ScriptRunner
         if (cfg.DropSignsSongs)
         {
             args.Add("--drop-signs-songs");
+        }
+
+        if (cfg.DropGarbageSubs)
+        {
+            args.Add("--drop-garbage-subs");
         }
 
         var minFree = cfg.MinFreeSpaceGb;
@@ -134,6 +142,7 @@ internal static class ScriptRunner
                 prefs.Append(show.Replace('\t', ' '))
                     .Append('\t').Append((pref.SubtitleLanguage ?? string.Empty).Trim())
                     .Append('\t').Append((pref.AudioLanguage ?? string.Empty).Trim())
+                    .Append('\t').Append((pref.AudioFallback ?? string.Empty).Trim())
                     .Append('\n');
             }
 
@@ -149,13 +158,20 @@ internal static class ScriptRunner
         args.Add(prefsPath);
 
         var total = 0;
-        foreach (var dir in cfg.EffectiveConvertFolders)
+        var folders = new List<string>(cfg.EffectiveConvertFolders);
+        if (!string.IsNullOrWhiteSpace(folderOverride))
+        {
+            folders.Clear();
+            folders.Add(folderOverride);
+        }
+
+        foreach (var dir in folders)
         {
             args.Add(dir);
             total += CountMkvFiles(dir);
         }
 
-        return RunAsync(logger, "bash", "convert_mkv_to_mp4.sh", args, total, progress, cancellationToken);
+        return RunAsync(logger, "bash", "convert_mkv_to_mp4.sh", args, total, progress, cancellationToken, notifyApply: apply);
     }
 
     /// <summary>
@@ -384,7 +400,8 @@ internal static class ScriptRunner
         List<string> scriptArgs,
         int totalFiles,
         IProgress<double> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool notifyApply = false)
     {
         var scriptPath = ExtractScript(resourceName);
 
@@ -506,6 +523,42 @@ internal static class ScriptRunner
 
         progress.Report(100);
         logger.LogInformation("[Episode Tools] {Script} finished.", resourceName);
+
+        if (notifyApply && resourceName == "convert_mkv_to_mp4.sh")
+        {
+            _ = Task.Run(() => SendWebhookNotificationAsync(logger));
+        }
+    }
+
+    /// <summary>
+    /// Posts a short JSON summary to the configured webhook when a convert run finishes.
+    /// Failures are logged but never thrown: notifications are best-effort.
+    /// </summary>
+    private static async Task SendWebhookNotificationAsync(ILogger logger)
+    {
+        try
+        {
+            var url = (GetConfig().NotifyWebhookUrl ?? string.Empty).Trim();
+            if (url.Length == 0)
+            {
+                return;
+            }
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var payload = JsonSerializer.Serialize(new
+            {
+                eventName = "convert-finished",
+                server = Environment.MachineName,
+                timestamp = DateTimeOffset.UtcNow.ToString("o")
+            });
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            await client.PostAsync(url, content).ConfigureAwait(false);
+            logger.LogInformation("[Episode Tools] Sent the finish notification to the webhook.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] Could not send the finish notification to the webhook.");
+        }
     }
 
     /// <summary>

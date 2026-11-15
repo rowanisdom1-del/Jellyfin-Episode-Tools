@@ -87,6 +87,18 @@
                     </label>
                     <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks titled signs, songs, lyrics, karaoke or titles are left out of the MP4 when a dialogue track exists — players otherwise show song lyrics flashing over the picture. Off: all tracks are kept. Check which episodes are affected on the Episode Tools Sub Check page.</div>
                 </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="DropGarbageSubs" name="DropGarbageSubs" type="checkbox" is="emby-checkbox" />
+                        <span>Drop garbage subtitle tracks when converting (random numbers, ads, junk)</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks whose text is mostly numbers, ad/spam lines or OCR junk are left out when a better track exists. Requires python3 on the server; skipped silently when it is missing.</div>
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="NotifyWebhookUrl">Notify webhook URL (optional)</label>
+                    <input id="NotifyWebhookUrl" name="NotifyWebhookUrl" type="text" is="emby-input" />
+                    <div class="fieldDescription">When set, a POST request is sent here after every convert run finishes (apply mode). Works with ntfy.sh, Discord (via a relay) or your own script. Leave empty to disable.</div>
+                </div>
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>
@@ -116,6 +128,8 @@
                     document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
                     document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
                     document.querySelector('#DropSignsSongs').checked = config.DropSignsSongs !== false;
+                    document.querySelector('#DropGarbageSubs').checked = config.DropGarbageSubs !== false;
+                    document.querySelector('#NotifyWebhookUrl').value = config.NotifyWebhookUrl || '';
                     document.querySelector('#MinFreeSpaceGb').value = (config.MinFreeSpaceGb !== undefined && config.MinFreeSpaceGb !== null) ? config.MinFreeSpaceGb : 10;
                     Dashboard.hideLoadingMsg();
                 });
@@ -145,6 +159,8 @@
                     config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
                     config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
                     config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
+                    config.DropGarbageSubs = document.querySelector('#DropGarbageSubs').checked;
+                    config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();
                     var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
                     config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
