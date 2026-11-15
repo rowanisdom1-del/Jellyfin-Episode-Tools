@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -402,30 +403,51 @@ internal static class IntrosRunner
                 }
             }
 
-            // Snap intro ends to silence, like the official scanner does.
-            foreach (var job in queue)
+            // Snap intro ends to silence, like the official scanner does. Each snap is an
+            // independent ffmpeg pass, so they run in parallel with the same parallelism as
+            // fingerprinting instead of one-after-another.
+            var toSnap = queue
+                .Where(j => bounds.ContainsKey(j.Path))
+                .Select(j => (Job: j, Bound: bounds[j.Path]))
+                .ToList();
+
+            if (toSnap.Count > 0)
             {
-                if (!bounds.TryGetValue(job.Path, out var b))
-                {
-                    continue;
-                }
+                _lastMessage = $"season {seasonIndex}/{seasons.Count}: snapping {toSnap.Count} intro(s)";
+                var snapped = new ConcurrentDictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
 
-                var end = AdjustEndToSilence(job.Path, b.Start, b.End, logger, ct);
-                if (end - b.Start < minDuration)
-                {
-                    // The snap shrank the intro below the configured minimum (quiet audio
-                    // near the start); keep the fingerprinted end instead.
-                    end = b.End;
-                }
+                await Parallel.ForEachAsync(
+                    toSnap,
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = parallelism,
+                        CancellationToken = ct
+                    },
+                    async (item, token) =>
+                    {
+                        var b = item.Bound;
+                        var end = AdjustEndToSilence(item.Job.Path, b.Start, b.End, logger, token);
+                        if (end - b.Start < minDuration)
+                        {
+                            // The snap shrank the intro below the configured minimum (quiet
+                            // audio near the start); keep the fingerprinted end instead.
+                            end = b.End;
+                        }
 
-                found[job.Path] = new IntroResult
+                        snapped[item.Job.Path] = new IntroResult
+                        {
+                            File = item.Job.Path,
+                            Show = item.Job.Show,
+                            Season = item.Job.Season,
+                            Start = Math.Round(b.Start, 2),
+                            End = Math.Round(end, 2)
+                        };
+                    }).ConfigureAwait(false);
+
+                foreach (var kvp in snapped)
                 {
-                    File = job.Path,
-                    Show = job.Show,
-                    Season = job.Season,
-                    Start = Math.Round(b.Start, 2),
-                    End = Math.Round(end, 2)
-                };
+                    found[kvp.Key] = kvp.Value;
+                }
             }
 
             WriteState();
@@ -946,11 +968,16 @@ internal static class IntrosRunner
     {
         try
         {
+            // Decode only the seconds around the matched end: the intro's start region cannot
+            // contain the silence we are looking for, so this cuts the decode roughly 5x.
+            // Input seeking rebases output timestamps to 0, hence the seek offset below.
+            var seek = Math.Max(0, (int)introEnd - 17);
             var args = string.Format(
                 CultureInfo.InvariantCulture,
-                "-hide_banner -loglevel info -vn -sn -dn -i \"{0}\" -to {1} -af \"silencedetect=noise=-50dB:duration=0.1\" -f null -",
+                "-hide_banner -loglevel info -vn -sn -dn -ss {0} -i \"{1}\" -to {2} -af \"silencedetect=noise=-50dB:duration=0.1\" -f null -",
+                seek,
                 path,
-                (int)introEnd + 2);
+                Math.Max(1, (int)introEnd + 2 - seek));
 
             var raw = Encoding.UTF8.GetString(RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false).GetAwaiter().GetResult());
             var originalEnd = new TimeRange(introEnd - 15, introEnd);
@@ -966,7 +993,7 @@ internal static class IntrosRunner
             foreach (Match match in SilenceRegex.Matches(raw))
             {
                 var isStart = match.Groups["type"].Value == "start";
-                var time = Convert.ToDouble(match.Groups["time"].Value, CultureInfo.InvariantCulture);
+                var time = Convert.ToDouble(match.Groups["time"].Value, CultureInfo.InvariantCulture) + seek;
                 if (isStart)
                 {
                     start = time;
