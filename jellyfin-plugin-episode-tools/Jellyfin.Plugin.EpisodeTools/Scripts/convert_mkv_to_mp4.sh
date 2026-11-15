@@ -433,7 +433,24 @@ skipped=0
 failed=0
 total=0
 
-while IFS= read -r -d '' src; do
+mapfile -d '' -t SRC_FILES < <(
+  for base in "${FOLDERS[@]}"; do
+    find "$base" -type f -iname '*.mkv' -print0 2>/dev/null
+  done
+  if $REMUX; then
+    for base in "${FOLDERS[@]}"; do
+      while IFS= read -r -d '' mp4; do
+        # MP4s that still have an MKV source are handled by the normal pass.
+        if find "$(dirname -- "$mp4")" -maxdepth 1 \
+            -iname "$(basename -- "${mp4%.*}").mkv" -print -quit 2>/dev/null | grep -q .; then
+          continue
+        fi
+        printf '%s\0' "$mp4"
+      done < <(find "$base" -type f -iname '*.mp4' -print0 2>/dev/null)
+    done
+  fi
+)
+for src in "${SRC_FILES[@]}"; do
   total=$((total + 1))
   # MP4 sources (remux-existing mode) replace themselves; MKV sources get a new MP4.
   if [[ "${src,,}" == *.mp4 ]]; then
@@ -860,23 +877,7 @@ fi
       echo "  Warning: could not delete original: $src"
     fi
   fi
-done < <(
-  for base in "${FOLDERS[@]}"; do
-    find "$base" -type f -iname '*.mkv' -print0 2>/dev/null
-  done
-  if $REMUX; then
-    for base in "${FOLDERS[@]}"; do
-      while IFS= read -r -d '' mp4; do
-        # MP4s that still have an MKV source are handled by the normal pass.
-        if find "$(dirname -- "$mp4")" -maxdepth 1 \
-            -iname "$(basename -- "${mp4%.*}").mkv" -print -quit 2>/dev/null | grep -q .; then
-          continue
-        fi
-        printf '%s\0' "$mp4"
-      done < <(find "$base" -type f -iname '*.mp4' -print0 2>/dev/null)
-    done
-  fi
-)
+done
 
 echo
 echo "Finished: $total file(s) found; $converted converted, $skipped skipped, $failed failed."
