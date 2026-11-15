@@ -18,6 +18,8 @@ with a Run button:
    already-converted episodes; replaces the old file only after verification
 7. **Audit library** — duplicate episodes (same show/season/episode in multiple files) and
    the largest video files
+8. **Scan intros (fast)** — fingerprints the first few minutes of every episode and finds
+   each season's shared opening; the result becomes skippable intro segments
 
 ## Dashboard pages
 
@@ -30,6 +32,7 @@ a left sidebar of tabs, a settings search box, and a sticky Save bar.
 | **Shows** | Every show with episode counts, .mkv-to-convert count and subtitle languages found — plus **per-show default subtitle and audio language** dropdowns, applied at the next conversion |
 | **Report** | Every .mkv that could not be converted, and exactly why |
 | **Sub Check** | Subtitle problems per episode: default track is a signs/songs/lyrics track, lyrics-heavy content, ultra-short cues |
+| **Intros** | Skippable openings found by the fast intro scanner, with a Scan now button and live progress |
 | **Audit** | Duplicate episodes and the largest files, grouped and readable |
 
 ## How conversions work
@@ -97,8 +100,34 @@ sudo systemctl restart jellyfin
   that exist are reported.
 - Updating: replace the plugin folder's contents with the new zip's and restart Jellyfin.
 
+## Fast intro scanner
+
+The **8. Scan intros (fast)** task finds each season's shared opening sequence and serves it
+as standard Jellyfin media segments, so every client gets an intro skip button (segments are
+copied into the server's database by the built-in **Extract media segments** task).
+
+Why it is faster than the official Intro Skipper:
+
+- **Only the start of the file is fingerprinted** — intros always live in the first few
+  minutes, so the default window is 4 minutes instead of the whole episode (a 24-minute
+  episode means ~6x less audio to decode; 50-minute files ~12x).
+- **Parallel decoding** — several episodes are fingerprinted at the same time (default 2
+  ffmpeg processes, configurable).
+- **Per-file cache** — fingerprints are stored keyed on size + mtime + window, so re-scans
+  only decode new or changed episodes.
+- The matching itself is the proven chromaprint algorithm (inverted-index search + contiguous
+  range finding, like the official plugin), ending with the same silence-snap of the intro's
+  end timestamp.
+
+Settings (Settings tab): fingerprint window in minutes, parallelism, shortest/longest intro.
+If the official Intro Skipper plugin is installed too, disable one of the scanners to avoid
+duplicate skip buttons.
+
 ## Version history
 
+- **2.5.0** — fast intro scanner: windowed chromaprint fingerprinting (first few minutes
+  only), parallel decoding, per-file cache; results served as standard media segments
+  (skippable intros) through the new **Intros** tab and the 8. scheduled task.
 - **2.4.1** — Moonbase-style hero card on the Settings tab (status line, eyebrow, task chips).
 - **2.4.0** — one Moonbase-style settings page (sidebar tabs, search, iOS toggles) in the
   Plugins section of the Dashboard sidebar; fixes the Shows page (audio-fallback dropdown

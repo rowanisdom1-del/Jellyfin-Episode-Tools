@@ -535,6 +535,10 @@
                             <span class="material-icons epNavIcon" aria-hidden="true">subtitles</span>
                             <span class="epNavText"><span class="epNavLabel">Sub Check</span><span class="epNavSub">Subtitle findings</span></span>
                         </button>
+                        <button type="button" class="epNavItem" data-tab="intros">
+                            <span class="material-icons epNavIcon" aria-hidden="true">av_timer</span>
+                            <span class="epNavText"><span class="epNavLabel">Intros</span><span class="epNavSub">Skippable openings</span></span>
+                        </button>
                         <button type="button" class="epNavItem" data-tab="audit">
                             <span class="material-icons epNavIcon" aria-hidden="true">fact_check</span>
                             <span class="epNavText"><span class="epNavLabel">Audit</span><span class="epNavSub">Duplicates &amp; large files</span></span>
@@ -675,6 +679,31 @@
                                     <div class="fieldDescription">When set, a POST request is sent here after every convert run finishes (apply mode). Works with ntfy.sh, Discord (via a relay) or your own script. Leave empty to disable.</div>
                                 </div>
                             </div>
+
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Intro scanning</h3>
+                                <div class="epInfoLine">The fast intro scanner is run from the Intros tab or with the "8. Scan intros (fast)" scheduled task. It only fingerprints the first few minutes of each episode, decodes several episodes in parallel and caches results per file.</div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="IntroWindowMinutes">Fingerprint window (minutes)</label>
+                                    <input id="IntroWindowMinutes" name="IntroWindowMinutes" type="number" min="1" max="15" step="1" is="emby-input" />
+                                    <div class="fieldDescription">How much audio at the start of each episode is fingerprinted (default 4). Intros always live in this window; scanning later parts of an episode is wasted work. Raise it only when episodes have very long openings after cold opens.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="IntroParallelism">Episodes fingerprinted at once</label>
+                                    <input id="IntroParallelism" name="IntroParallelism" type="number" min="1" max="8" step="1" is="emby-input" />
+                                    <div class="fieldDescription">How many ffmpeg processes decode episodes at the same time (default 2). 2 is gentle on a 4-core Raspberry Pi; 3–4 finishes faster.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="IntroMinDuration">Shortest intro (seconds)</label>
+                                    <input id="IntroMinDuration" name="IntroMinDuration" type="number" min="1" max="600" step="1" is="emby-input" />
+                                    <div class="fieldDescription">Audio ranges shorter than this are ignored (default 15).</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="IntroMaxDuration">Longest intro (seconds)</label>
+                                    <input id="IntroMaxDuration" name="IntroMaxDuration" type="number" min="1" max="900" step="1" is="emby-input" />
+                                    <div class="fieldDescription">Audio ranges longer than this are ignored (default 120). Raises it for shows with very long openings.</div>
+                                </div>
+                            </div>
                         </section>
 
                         <!-- ============ Shows tab ============ -->
@@ -779,6 +808,49 @@
                             </div>
                         </section>
 
+                        <!-- ============ Intros tab ============ -->
+                        <section class="epTabPanel" data-tab="intros">
+                            <div class="epPageHead">
+                                <div class="epPageHeadText">
+                                    <h3 class="epPageTitle">Intros</h3>
+                                    <p class="epPageLead">Skippable openings found by the fast intro scanner. It fingerprints only the first few minutes of each episode (the official scanner fingerprints whole episodes), decodes several episodes at once and caches per file, so re-scans only touch new or changed episodes.</p>
+                                </div>
+                                <button type="button" id="IntrosScanBtn" class="raised button-submit epRefreshBtn">Scan now</button>
+                                <button type="button" class="raised button-mini epRefreshBtn" data-refresh="intros">Refresh</button>
+                            </div>
+                            <div id="IntrosScanStatus" class="epStatusCard">
+                                <span class="material-icons epStatusIcon" aria-hidden="true">av_timer</span>
+                                <div class="epStatusLines">
+                                    <span class="epStatusTitle" id="IntrosScanTitle">Scanning</span>
+                                    <span class="epStatusState"><span class="epStatusDot"></span><span id="IntrosScanMsg"></span></span>
+                                </div>
+                            </div>
+                            <div class="verticalSection">
+                                <h3 class="sectionTitle">Detected intros</h3>
+                                <div id="IntrosInfo" class="epInfoLine"></div>
+                                <table class="tblDataTable detailTable" style="width:100%;">
+                                    <thead>
+                                        <tr>
+                                            <th style="text-align:left;">Show</th>
+                                            <th>Season</th>
+                                            <th style="text-align:left;">Episode file</th>
+                                            <th>Intro</th>
+                                            <th>Length</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="IntrosBody">
+                                        <tr><td colspan="5">Loading…</td></tr>
+                                    </tbody>
+                                </table>
+                                <div class="epInfoLine" style="margin-top:1em;">
+                                    Intros become skippable via the server's built-in <b>Extract media segments</b>
+                                    task (it runs on its own schedule and copies them to the segments database).
+                                    If the official Intro Skipper plugin is also installed, disable one of the two
+                                    scanners to avoid duplicate skip buttons.
+                                </div>
+                            </div>
+                        </section>
+
                         <!-- ============ Audit tab ============ -->
                         <section class="epTabPanel" data-tab="audit">
                             <div class="epPageHead">
@@ -817,7 +889,7 @@
         (function () {
             var pluginUniqueId = '059e3874-fa20-4af9-af24-8d26823840d9';
             var page = document.querySelector('#EpisodeToolsConfigPage');
-            var TABS = ['settings', 'shows', 'report', 'subcheck', 'audit'];
+            var TABS = ['settings', 'shows', 'report', 'subcheck', 'intros', 'audit'];
             var tabLoaded = {};
             var currentTab = 'settings';
 
@@ -894,6 +966,10 @@
                     document.querySelector('#DropGarbageSubs').checked = config.DropGarbageSubs !== false;
                     document.querySelector('#MinFreeSpaceGb').value = (config.MinFreeSpaceGb !== undefined && config.MinFreeSpaceGb !== null) ? config.MinFreeSpaceGb : 10;
                     document.querySelector('#NotifyWebhookUrl').value = config.NotifyWebhookUrl || '';
+                    document.querySelector('#IntroWindowMinutes').value = (config.IntroWindowMinutes !== undefined && config.IntroWindowMinutes !== null) ? config.IntroWindowMinutes : 4;
+                    document.querySelector('#IntroParallelism').value = (config.IntroParallelism !== undefined && config.IntroParallelism !== null) ? config.IntroParallelism : 2;
+                    document.querySelector('#IntroMinDuration').value = (config.IntroMinDuration !== undefined && config.IntroMinDuration !== null) ? config.IntroMinDuration : 15;
+                    document.querySelector('#IntroMaxDuration').value = (config.IntroMaxDuration !== undefined && config.IntroMaxDuration !== null) ? config.IntroMaxDuration : 120;
                     Dashboard.hideLoadingMsg();
                 });
             }
@@ -926,6 +1002,14 @@
                         var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
                         config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
                         config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();
+                        var introWindow = parseInt(document.querySelector('#IntroWindowMinutes').value, 10);
+                        config.IntroWindowMinutes = isNaN(introWindow) ? 4 : introWindow;
+                        var introParallel = parseInt(document.querySelector('#IntroParallelism').value, 10);
+                        config.IntroParallelism = isNaN(introParallel) ? 2 : introParallel;
+                        var introMin = parseInt(document.querySelector('#IntroMinDuration').value, 10);
+                        config.IntroMinDuration = isNaN(introMin) ? 15 : introMin;
+                        var introMax = parseInt(document.querySelector('#IntroMaxDuration').value, 10);
+                        config.IntroMaxDuration = isNaN(introMax) ? 120 : introMax;
                         ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
                         });
@@ -1428,6 +1512,86 @@
                 });
             }
 
+            /* ---------- intros tab ---------- */
+            var introsTimer = null;
+
+            function fmtClock(seconds) {
+                var s = Math.max(0, Math.round(seconds));
+                var m = Math.floor(s / 60);
+                var r = s % 60;
+                return m + ':' + (r < 10 ? '0' : '') + r;
+            }
+
+            function pollIntros() {
+                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/IntrosStatus'), dataType: 'json' })
+                    .then(function (st) {
+                        var card = document.querySelector('#IntrosScanStatus');
+                        var scan = st.scan || {};
+                        if (scan.running) {
+                            document.querySelector('#IntrosScanTitle').textContent = 'Scanning';
+                            document.querySelector('#IntrosScanMsg').textContent =
+                                (scan.message || '') + (scan.progress ? ' (' + Math.round(scan.progress) + '%)' : '');
+                            card.classList.add('is-visible');
+                            if (!introsTimer) { introsTimer = setInterval(pollIntros, 2000); }
+                        } else {
+                            card.classList.remove('is-visible');
+                            if (introsTimer) { clearInterval(introsTimer); introsTimer = null; }
+                        }
+
+                        var body = document.querySelector('#IntrosBody');
+                        body.innerHTML = '';
+                        var intros = st.intros || [];
+                        document.querySelector('#IntrosInfo').textContent =
+                            intros.length + ' intro(s) found' + (st.scannedAt ? ' — latest scan: ' + String(st.scannedAt).replace('T', ' ').replace('Z', ' UTC') : '');
+                        intros.forEach(function (r) {
+                            var tr = document.createElement('tr');
+                            var tdShow = document.createElement('td');
+                            tdShow.textContent = r.show;
+                            tr.appendChild(tdShow);
+                            var tdSeason = document.createElement('td');
+                            tdSeason.textContent = r.season;
+                            tdSeason.style.textAlign = 'center';
+                            tr.appendChild(tdSeason);
+                            var tdFile = document.createElement('td');
+                            tdFile.textContent = r.file;
+                            tdFile.style.wordBreak = 'break-all';
+                            tr.appendChild(tdFile);
+                            var tdRange = document.createElement('td');
+                            tdRange.textContent = fmtClock(r.start) + ' – ' + fmtClock(r.end);
+                            tdRange.style.textAlign = 'center';
+                            tr.appendChild(tdRange);
+                            var tdLen = document.createElement('td');
+                            tdLen.textContent = Math.round(r.end - r.start) + 's';
+                            tdLen.style.textAlign = 'center';
+                            tr.appendChild(tdLen);
+                            body.appendChild(tr);
+                        });
+                        if (intros.length === 0) {
+                            body.innerHTML = '<tr><td colspan="5">No intros recorded yet — run a scan.</td></tr>';
+                        }
+                    }).catch(function () {
+                        document.querySelector('#IntrosBody').innerHTML =
+                            '<tr><td colspan="5">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
+                    });
+            }
+
+            document.querySelector('#IntrosScanBtn').addEventListener('click', function () {
+                var btn = this;
+                btn.disabled = true;
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('EpisodeTools/IntrosStart'), dataType: 'text' })
+                    .then(function () {
+                        btn.disabled = false;
+                        if (!introsTimer) { introsTimer = setInterval(pollIntros, 2000); }
+                        pollIntros();
+                    }).catch(function () {
+                        btn.disabled = false;
+                    });
+            });
+
+            function loadIntros() {
+                pollIntros();
+            }
+
             /* ---------- lazy tab data + pageshow ---------- */
             function loadTabData(tab, force) {
                 if (tab === 'settings') { loadSettings(); return; }
@@ -1436,6 +1600,7 @@
                 if (tab === 'shows') { loadShows(); }
                 else if (tab === 'report') { loadReport(); }
                 else if (tab === 'subcheck') { loadSubCheck(); }
+                else if (tab === 'intros') { loadIntros(); }
                 else if (tab === 'audit') { loadAudit(); }
             }
 

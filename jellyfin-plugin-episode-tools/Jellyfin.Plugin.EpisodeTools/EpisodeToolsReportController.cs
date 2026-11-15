@@ -350,6 +350,53 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
+    /// Starts the fast intro scan. Safe to call twice; the second call is a no-op while a
+    /// scan is running.
+    /// </summary>
+    [HttpPost("IntrosStart")]
+    public IActionResult StartIntros()
+    {
+        if (!IntrosRunner.TryStart(_logger))
+        {
+            return Ok("already running");
+        }
+
+        return Ok("started");
+    }
+
+    /// <summary>
+    /// Returns the intro scan status plus the latest results.
+    /// </summary>
+    [HttpGet("IntrosStatus")]
+    public IActionResult IntrosStatus()
+    {
+        var results = IntrosRunner.LoadResults();
+        var resultsFile = Path.Combine(Plugin.Instance?.WorkFolder ?? ".", "intros.json");
+        var scannedAt = File.Exists(resultsFile)
+            ? File.GetLastWriteTimeUtc(resultsFile)
+            : (DateTime?)null;
+
+        var payload = new
+        {
+            scan = IntrosRunner.Status(),
+            scannedAt,
+            intros = results.Select(r => new
+            {
+                show = r.Show,
+                season = r.Season,
+                file = r.File,
+                start = r.Start,
+                end = r.End
+            })
+        };
+
+        return Ok(System.Text.Json.JsonSerializer.Serialize(payload, new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+        }));
+    }
+
+    /// <summary>
     /// Resolves one duplicate group from the latest audit. Body: {key, action} where action is
     /// "keep-largest", "keep-newest" (others archived to the plugin trash folder) or
     /// "delete-others" (permanent). Only files listed in the audit are touched.

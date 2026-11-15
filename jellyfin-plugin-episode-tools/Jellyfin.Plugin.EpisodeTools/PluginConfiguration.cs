@@ -306,4 +306,94 @@ public class PluginConfiguration : BasePluginConfiguration
         }
         set => _convertUnusualAudioToAac = value ? "true" : "false";
     }
+
+    // Backing fields for the fast intro scanner settings. Kept as strings for tolerant
+    // deserialization, following the same pattern as MinFreeSpaceGb above.
+    private string _introWindowMinutes = "4";
+    private string _introParallelism = "2";
+    private string _introMinDuration = "15";
+    private string _introMaxDuration = "120";
+
+    /// <summary>
+    /// Raw serialized value for IntroWindowMinutes.
+    /// </summary>
+    [XmlElement("IntroWindowMinutes")]
+    public string IntroWindowMinutesRaw
+    {
+        get => _introWindowMinutes;
+        set => _introWindowMinutes = value ?? "4";
+    }
+
+    /// <summary>
+    /// Gets or sets how many minutes of audio at the start of each episode are fingerprinted
+    /// when scanning for intros (default 4). Intros always live at the start; limiting the
+    /// window is what makes the scan much faster than fingerprinting whole episodes.
+    /// </summary>
+    [XmlIgnore]
+    public int IntroWindowMinutes
+    {
+        get => int.TryParse(_introWindowMinutes, out var n) && n >= 1 ? n : 4;
+        set => _introWindowMinutes = Math.Clamp(value, 1, 15).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Raw serialized value for IntroParallelism.
+    /// </summary>
+    [XmlElement("IntroParallelism")]
+    public string IntroParallelismRaw
+    {
+        get => _introParallelism;
+        set => _introParallelism = value ?? "2";
+    }
+
+    /// <summary>
+    /// Gets or sets how many episodes are fingerprinted at the same time (default 2).
+    /// Each run spawns one ffmpeg process.
+    /// </summary>
+    [XmlIgnore]
+    public int IntroParallelism
+    {
+        get => int.TryParse(_introParallelism, out var n) && n >= 1 ? n : 2;
+        set => _introParallelism = Math.Clamp(value, 1, 8).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Raw serialized value for IntroMinDuration.
+    /// </summary>
+    [XmlElement("IntroMinDuration")]
+    public string IntroMinDurationRaw
+    {
+        get => _introMinDuration;
+        set => _introMinDuration = value ?? "15";
+    }
+
+    /// <summary>
+    /// Gets or sets the shortest audio range (in seconds) that counts as an intro (default 15).
+    /// </summary>
+    [XmlIgnore]
+    public int IntroMinDuration
+    {
+        get => int.TryParse(_introMinDuration, out var n) && n >= 1 ? n : 15;
+        set => _introMinDuration = Math.Clamp(value, 1, 600).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// Raw serialized value for IntroMaxDuration.
+    /// </summary>
+    [XmlElement("IntroMaxDuration")]
+    public string IntroMaxDurationRaw
+    {
+        get => _introMaxDuration;
+        set => _introMaxDuration = value ?? "120";
+    }
+
+    /// <summary>
+    /// Gets or sets the longest audio range (in seconds) that counts as an intro (default 120).
+    /// </summary>
+    [XmlIgnore]
+    public int IntroMaxDuration
+    {
+        get => int.TryParse(_introMaxDuration, out var n) && n >= 1 ? n : 120;
+        set => _introMaxDuration = Math.Clamp(value, 1, 900).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
 }

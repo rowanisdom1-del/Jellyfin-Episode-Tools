@@ -1,5 +1,7 @@
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.MediaSegments;
 using MediaBrowser.Controller.Plugins;
+using Jellyfin.Plugin.EpisodeTools.Intros;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.Plugin.EpisodeTools;
@@ -16,5 +18,8 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
             .AddMvc()
             .AddApplicationPart(typeof(PluginServiceRegistrator).Assembly)
             .AddControllersAsServices();
+
+        // Serve the intros found by the fast scanner as media segments (intro skip buttons).
+        serviceCollection.AddSingleton<IMediaSegmentProvider, EpisodeToolsSegmentProvider>();
     }
 }
