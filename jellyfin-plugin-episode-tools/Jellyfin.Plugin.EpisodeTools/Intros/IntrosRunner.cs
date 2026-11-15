@@ -75,7 +75,23 @@ internal static class IntrosRunner
             _cancellation = new CancellationTokenSource();
             var ct = _cancellation.Token;
             _running = Task.Run(
-                () => RunAsync(logger, ct),
+                async () =>
+                {
+                    try
+                    {
+                        await RunAsync(logger, ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _lastMessage = "stopped";
+                        logger.LogInformation("[Episode Tools] Intro scan stopped.");
+                    }
+                    catch (Exception ex)
+                    {
+                        _lastMessage = "failed: " + ex.Message;
+                        logger.LogError(ex, "[Episode Tools] Fast intro scan failed.");
+                    }
+                },
                 CancellationToken.None);
             return true;
         }

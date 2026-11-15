@@ -31,6 +31,28 @@ public class EpisodeToolsReportController : ControllerBase
         _logger = logger;
     }
 
+    /// <summary>Returns raw JSON without re-serializing it into a JSON string.</summary>
+    private ContentResult ContentJson(string json)
+    {
+        return new ContentResult
+        {
+            Content = json,
+            ContentType = "application/json",
+            StatusCode = 200
+        };
+    }
+
+    /// <summary>Returns raw plain text.</summary>
+    private ContentResult ContentText(string text)
+    {
+        return new ContentResult
+        {
+            Content = text,
+            ContentType = "text/plain; charset=utf-8",
+            StatusCode = 200
+        };
+    }
+
     /// <summary>
     /// Returns the report of the latest convert run as plain text.
     /// Lines are tab separated: RUN mode timestamp, or CANNOT path reason.
@@ -45,10 +67,10 @@ public class EpisodeToolsReportController : ControllerBase
         {
             if (!System.IO.File.Exists(path))
             {
-                return Ok("No report yet. Run one of the convert tasks (preview or real) first.");
+                return ContentText("No report yet. Run one of the convert tasks (preview or real) first.");
             }
 
-            return Ok(System.IO.File.ReadAllText(path, Encoding.UTF8));
+            return ContentText(System.IO.File.ReadAllText(path, Encoding.UTF8));
         }
         catch (Exception ex)
         {
@@ -71,10 +93,10 @@ public class EpisodeToolsReportController : ControllerBase
         {
             if (!System.IO.File.Exists(path))
             {
-                return Ok("No audit yet. Run task '7. Audit library' first.");
+                return ContentText("No audit yet. Run task '7. Audit library' first.");
             }
 
-            return Ok(System.IO.File.ReadAllText(path, Encoding.UTF8));
+            return ContentText(System.IO.File.ReadAllText(path, Encoding.UTF8));
         }
         catch (Exception ex)
         {
@@ -98,10 +120,10 @@ public class EpisodeToolsReportController : ControllerBase
         {
             if (!System.IO.File.Exists(path))
             {
-                return Ok("No subtitle check yet. Run task '5. Check subtitles' first.");
+                return ContentText("No subtitle check yet. Run task '5. Check subtitles' first.");
             }
 
-            return Ok(System.IO.File.ReadAllText(path, Encoding.UTF8));
+            return ContentText(System.IO.File.ReadAllText(path, Encoding.UTF8));
         }
         catch (Exception ex)
         {
@@ -206,7 +228,7 @@ public class EpisodeToolsReportController : ControllerBase
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
-        return Ok(json);
+        return ContentJson(json);
     }
 
     /// <summary>
@@ -229,7 +251,7 @@ public class EpisodeToolsReportController : ControllerBase
             aud2 = p.AudioFallback
         });
 
-        return Ok(JsonSerializer.Serialize(new { prefs }));
+        return ContentJson(JsonSerializer.Serialize(new { prefs }));
     }
 
     /// <summary>
@@ -279,7 +301,7 @@ public class EpisodeToolsReportController : ControllerBase
 
         cfg.SaveConfiguration();
         _logger.LogInformation("[Episode Tools] Saved track preference for '{Show}': subtitles='{Sub}', audio='{Aud}'.", show, sub, aud);
-        return Ok("saved");
+        return ContentText("saved");
     }
 
     private static IEnumerable<string> SafeEnumerateFiles(string dir)
@@ -338,7 +360,7 @@ public class EpisodeToolsReportController : ControllerBase
         }
 
         _logger.LogInformation("[Episode Tools] Per-show conversion started for {Folder}.", folder);
-        return Ok("started");
+        return ContentText("started");
     }
 
     /// <summary>
@@ -347,7 +369,7 @@ public class EpisodeToolsReportController : ControllerBase
     [HttpGet("ConvertStatus")]
     public IActionResult ConvertStatus()
     {
-        return Ok(System.Text.Json.JsonSerializer.Serialize(ShowConvertRunner.Status()));
+        return ContentJson(System.Text.Json.JsonSerializer.Serialize(ShowConvertRunner.Status()));
     }
 
     /// <summary>
@@ -359,10 +381,10 @@ public class EpisodeToolsReportController : ControllerBase
     {
         if (!IntrosRunner.TryStart(_logger))
         {
-            return Ok("already running");
+            return ContentText("already running");
         }
 
-        return Ok("started");
+        return ContentText("started");
     }
 
     /// <summary>
@@ -391,7 +413,7 @@ public class EpisodeToolsReportController : ControllerBase
             })
         };
 
-        return Ok(System.Text.Json.JsonSerializer.Serialize(payload, new System.Text.Json.JsonSerializerOptions
+        return ContentJson(System.Text.Json.JsonSerializer.Serialize(payload, new System.Text.Json.JsonSerializerOptions
         {
             PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
         }));
@@ -502,7 +524,7 @@ public class EpisodeToolsReportController : ControllerBase
         _logger.LogInformation(
             "[Episode Tools] Duplicate group {Key}: kept {Keep}, removed {Count} file(s).",
             key, keep, removed.Count);
-        return Ok(System.Text.Json.JsonSerializer.Serialize(new
+        return ContentJson(System.Text.Json.JsonSerializer.Serialize(new
         {
             kept = keep,
             removed,
