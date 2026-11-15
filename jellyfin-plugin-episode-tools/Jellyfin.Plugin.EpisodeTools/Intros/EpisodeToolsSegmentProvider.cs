@@ -8,6 +8,7 @@ using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaSegments;
+using MediaBrowser.Model;
 using MediaBrowser.Model.MediaSegments;
 using Microsoft.Extensions.Logging;
 
