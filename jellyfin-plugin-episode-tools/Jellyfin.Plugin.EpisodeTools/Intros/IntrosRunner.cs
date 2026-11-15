@@ -542,7 +542,7 @@ internal static class IntrosRunner
 
         try
         {
-            var raw = await RunProcessAsync("ffmpeg", args, false, logger, ct).ConfigureAwait(false);
+            var raw = await RunProcessAsync(FfmpegPath(), args, false, logger, ct).ConfigureAwait(false);
             if (raw.Length == 0 || raw.Length % 4 != 0)
             {
                 logger.LogWarning(
@@ -572,6 +572,53 @@ internal static class IntrosRunner
                 path);
             return null;
         }
+    }
+
+    private static string? _ffmpegPath;
+
+    /// <summary>
+    /// Resolves the ffmpeg executable. Jellyfin's Docker images ship it outside PATH at
+    /// /usr/lib/jellyfin-ffmpeg/ffmpeg and expose the location through the JELLYFIN_FFMPEG
+    /// environment variable; bare installs usually have it on PATH.
+    /// </summary>
+    private static string FfmpegPath()
+    {
+        if (_ffmpegPath is not null)
+        {
+            return _ffmpegPath;
+        }
+
+        foreach (var candidate in new[]
+                 {
+                     Environment.GetEnvironmentVariable("JELLYFIN_FFMPEG"),
+                     "/usr/lib/jellyfin-ffmpeg/ffmpeg",
+                     "/usr/bin/ffmpeg",
+                     "/usr/local/bin/ffmpeg",
+                     "ffmpeg"
+                 })
+        {
+            if (string.IsNullOrEmpty(candidate))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (candidate.Contains(Path.DirectorySeparatorChar) && !File.Exists(candidate))
+                {
+                    continue;
+                }
+            }
+            catch
+            {
+                // Fall through to the next candidate.
+            }
+
+            _ffmpegPath = candidate;
+            return candidate;
+        }
+
+        return "ffmpeg";
     }
 
     private static async Task<byte[]> RunProcessAsync(
@@ -606,7 +653,6 @@ internal static class IntrosRunner
         var output = new MemoryStream();
         var buffer = new byte[8192];
         var stream = stderr ? process.StandardError : process.StandardOutput;
-
         if (stderr)
         {
             var text = await process.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
@@ -765,7 +811,7 @@ internal static class IntrosRunner
                 path,
                 (int)introEnd + 2);
 
-            var raw = Encoding.UTF8.GetString(RunProcessAsync("ffmpeg", args, true, logger, ct).ConfigureAwait(false).GetAwaiter().GetResult());
+            var raw = Encoding.UTF8.GetString(RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false).GetAwaiter().GetResult());
             var originalEnd = new TimeRange(introEnd - 15, introEnd);
 
             double start = double.MinValue, end = double.MinValue;
