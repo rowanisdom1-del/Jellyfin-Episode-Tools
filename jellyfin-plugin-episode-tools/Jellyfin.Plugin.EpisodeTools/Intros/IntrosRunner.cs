@@ -269,6 +269,15 @@ internal static class IntrosRunner
         var cacheDir = Path.Combine(work, "intros-fpcache");
         Directory.CreateDirectory(cacheDir);
 
+        // Load fingerprints from the cache for everything we already scanned before.
+        foreach (var job in jobs)
+        {
+            if (TryLoadCached(cacheDir, job.Path, window, out var points))
+            {
+                job.Points = points;
+            }
+        }
+
         // Compare seasons: every episode against the episodes that come after it.
         // Seasons are processed one at a time and results are saved after each one,
         // so intros stream in as the scan runs instead of only at the very end.

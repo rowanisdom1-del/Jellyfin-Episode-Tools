@@ -137,7 +137,8 @@ of the two intro scanners to avoid duplicate skip buttons.
 
 - **3.0.1** — intro scan: skip re-walking folders that are an ancestor/descendant of another
   configured folder (e.g. listing both `/media/Series` and `/media/` used to cross-compare
-  the same tree against itself as one giant group, stalling the scan for hours).
+  the same tree against itself as one giant group, stalling the scan for hours), and restore
+  the per-file fingerprint cache preload that was lost in the per-season refactor.
 
 - **3.0.0** — intro scanner production hardening: recursive episode enumeration (episodes in
   season subfolders are now found), ffmpeg resolution via `JELLYFIN_FFMPEG` (fixes Docker
