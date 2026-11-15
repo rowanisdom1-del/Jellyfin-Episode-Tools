@@ -181,7 +181,7 @@ internal static class IntrosRunner
             }
 
             var info = new FileInfo(file);
-            var key = (info.Length, info.LastWriteTimeUtc);
+            var key = (Length: info.Length, Modified: info.LastWriteTimeUtc);
             if (_resultsCache is { } cached && cached.Length == key.Length && cached.Modified == key.Modified)
             {
                 return cached.Results;
