@@ -768,6 +768,16 @@ internal static class IntrosRunner
         });
 
         process.Start();
+        try
+        {
+            // Run below normal priority so scanning never competes with playback or
+            // transcoding for CPU (same idea as nice 19 in the convert tasks).
+            process.PriorityClass = ProcessPriorityClass.BelowNormal;
+        }
+        catch (Exception)
+        {
+            // Priority is best effort (e.g. not permitted on some platforms).
+        }
 
         if (stderr)
         {
