@@ -15,6 +15,7 @@ stream for any missing output.
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -116,39 +117,44 @@ def main(argv):
 
     source = argv[1]
     out_dir = argv[2]
+    indices = [i for i in argv[3:] if i.isdigit()]
+    if not indices:
+        return 0
     os.makedirs(out_dir, exist_ok=True)
+    tmpdir = tempfile.mkdtemp(prefix="epclean_", dir=out_dir)
 
-    for index in argv[3:]:
-        if not index.isdigit():
-            continue
-        try:
-            with tempfile.NamedTemporaryFile(
-                    suffix=".ass", dir=out_dir, delete=False, mode="w", encoding="utf-8") as tmp:
-                ass_path = tmp.name
+    # One ffmpeg pass for every requested track. Fansub files scatter tens of
+    # thousands of cues across a large container, so reading the file once
+    # instead of once per track is the difference between seconds and minutes.
+    # Outputs are named in0.ass, in1.ass, ... in the same order as `indices`.
+    try:
+        args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+                "-i", source]
+        for k, index in enumerate(indices):
+            args += ["-map", f"0:{index}", "-f", "ass",
+                     os.path.join(tmpdir, f"in{k}.ass")]
+        subprocess.run(args, capture_output=True, timeout=600)
+    except Exception as exc:  # never break the conversion over subtitles
+        print(f"clean_subs: extraction: {exc}", file=sys.stderr)
 
-            result = subprocess.run(
-                [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-                 "-i", source, "-map", f"0:{index}", "-f", "ass", ass_path],
-                capture_output=True, timeout=90)
-            if result.returncode != 0 or not os.path.exists(ass_path):
-                continue
-
-            cues = merge_micro_cues(load_cues(ass_path))
-            os.unlink(ass_path)
-            if not cues:
-                continue
-
-            out_path = os.path.join(out_dir, f"sub_{index}.srt")
-            write_srt(cues, out_path)
-            # Tab separated so the caller can pair outputs with stream indices even
-            # when a stream failed to clean and is missing from the list.
-            print(f"{index}\t{out_path}")
-        except Exception as exc:  # never break the conversion over one stream
-            print(f"clean_subs: stream {index}: {exc}", file=sys.stderr)
+    try:
+        for k, index in enumerate(indices):
+            ass_path = os.path.join(tmpdir, f"in{k}.ass")
             try:
-                os.unlink(ass_path)
-            except Exception:
-                pass
+                if not os.path.exists(ass_path) or os.path.getsize(ass_path) == 0:
+                    continue
+                cues = merge_micro_cues(load_cues(ass_path))
+                if not cues:
+                    continue
+                out_path = os.path.join(out_dir, f"sub_{index}.srt")
+                write_srt(cues, out_path)
+                # Tab separated so the caller can pair outputs with stream indices
+                # even when a stream failed to clean and is missing from the list.
+                print(f"{index}\t{out_path}")
+            except Exception as exc:  # never break the conversion over one stream
+                print(f"clean_subs: stream {index}: {exc}", file=sys.stderr)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     return 0
 

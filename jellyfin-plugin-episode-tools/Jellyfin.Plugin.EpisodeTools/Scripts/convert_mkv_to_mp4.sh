@@ -598,11 +598,19 @@ if $DROP_GARBAGE_SUBS && command -v python3 >/dev/null 2>&1 && (( ${#SUB_INDICES
   kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
   dropped=""
   for i in "${!SUB_INDICES[@]}"; do
-    # timeout: pathological ASS tracks (one cue per letter) can make ffmpeg's SRT
-    # encoder spin for ever; on timeout/ failure the track is simply kept.
+    # Pathological fansub tracks (one cue per letter, tens of thousands of cues
+    # scattered across a big file) make SRT extraction crawl. Cap it, force-kill
+    # on expiry (timeout -k: ffmpeg can ignore a plain SIGTERM while stuck in a
+    # loop), and skip analysis for the whole file once one track trips the cap.
     # ${SUB_INDICES[$i]} is the real stream index - "0:s:$i" would probe the wrong
     # track whenever an earlier subtitle was filtered out by preferences.
-    if timeout 60 ffmpeg -v error -y -i "$src" -map "0:${SUB_INDICES[$i]}" -f srt "$garbage_tmp" 2>/dev/null; then
+    timeout -k 15 45 ffmpeg -v error -y -i "$src" -map "0:${SUB_INDICES[$i]}" -f srt "$garbage_tmp" 2>/dev/null
+    rc=$?
+    if (( rc == 124 || rc == 137 )); then
+      echo "  Note: subtitle extraction timed out - skipping garbage analysis, all tracks kept."
+      break
+    fi
+    if (( rc == 0 )); then
       ratio=$(python3 - "$garbage_tmp" <<'PYEOF'
 import re, sys
 try:
