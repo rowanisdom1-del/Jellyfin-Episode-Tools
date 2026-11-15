@@ -388,6 +388,16 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
+    /// Stops a running intro scan.
+    /// </summary>
+    [HttpPost("IntrosStop")]
+    public IActionResult StopIntros()
+    {
+        IntrosRunner.Stop();
+        return ContentText("stopped");
+    }
+
+    /// <summary>
     /// Returns the intro scan status plus the latest results.
     /// </summary>
     [HttpGet("IntrosStatus")]
