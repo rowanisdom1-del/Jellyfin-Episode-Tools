@@ -68,15 +68,15 @@ Any push builds the plugin automatically (`.github/workflows/build.yml`) and kee
 as an artifact. To publish a release, push a tag:
 
 ```bash
-git tag v3.0.2 && git push origin v3.0.2
+git tag v3.0.3 && git push origin v3.0.3
 ```
 
-The workflow attaches `EpisodeTools_3.0.2.0.zip` to the release. Download from the
+The workflow attaches `EpisodeTools_3.0.3.0.zip` to the release. Download from the
 [Releases page](../../releases).
 
 ## Install
 
-**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.0.2.0/`
+**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.0.3.0/`
 (the DLL must sit directly in that folder) and restart the container. The container needs
 `python3` for the rename/audit tasks — the official Jellyfin image has ffmpeg bundled.
 
@@ -84,10 +84,10 @@ The workflow attaches `EpisodeTools_3.0.2.0.zip` to the release. Download from t
 
 ```bash
 sudo apt install unzip acl
-wget https://github.com/<your-user>/<your-repo>/releases/download/v3.0.2/EpisodeTools_3.0.2.0.zip
-sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.0.2.0
-sudo unzip -o EpisodeTools_3.0.2.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.0.2.0
-sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.0.2.0
+wget https://github.com/<your-user>/<your-repo>/releases/download/v3.0.3/EpisodeTools_3.0.3.0.zip
+sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.0.3.0
+sudo unzip -o EpisodeTools_3.0.3.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.0.3.0
+sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.0.3.0
 sudo setfacl -R -m u:jellyfin:rwX /mnt/storage/media
 sudo setfacl -R -d -m u:jellyfin:rwX /mnt/storage/media
 sudo systemctl restart jellyfin
@@ -134,6 +134,14 @@ Intro Skipper, which covers every media segment type. If you run both plugins, d
 of the two intro scanners to avoid duplicate skip buttons.
 
 ## Version history
+
+- **3.0.3** — code review fixes: show folders are now deduplicated by full path instead of
+  folder name (folders sharing a name like "Movie" or "Specials" across trees were silently
+  skipped, losing their episodes), an interrupted scan no longer wipes intros for seasons it
+  has not reached yet (previous results are kept until each season is re-compared),
+  intros.json is written atomically (readers can no longer see a half-written file), a fully
+  cached scan shows real progress, and the Intros tab text no longer repeats the outdated
+  "fingerprints whole episodes" claim about the official scanner.
 
 - **3.0.2** — intro scan: compare episodes within their own directory instead of per
   "show folder", so a folder tree containing many shows (e.g. a whole NAS share mounted

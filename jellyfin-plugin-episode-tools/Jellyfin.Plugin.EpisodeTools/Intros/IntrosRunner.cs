@@ -290,6 +290,18 @@ internal static class IntrosRunner
         var totalMissing = jobs.Count(j => j.Points is null);
         var done = 0;
         var found = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
+
+        // Seed with the previous run's results so an interrupted scan never wipes intros for
+        // seasons it has not reached yet; entries for files that disappeared drop out here.
+        var jobPaths = new HashSet<string>(jobs.Select(j => j.Path), StringComparer.OrdinalIgnoreCase);
+        foreach (var prev in LoadResults())
+        {
+            if (jobPaths.Contains(prev.File))
+            {
+                found[prev.File] = prev;
+            }
+        }
+
         var jsonOpts = new System.Text.Json.JsonSerializerOptions
         {
             WriteIndented = true,
@@ -311,7 +323,11 @@ internal static class IntrosRunner
             };
 
             Directory.CreateDirectory(work);
-            File.WriteAllText(ResultsPath, System.Text.Json.JsonSerializer.Serialize(state, jsonOpts));
+            var tmp = ResultsPath + ".tmp";
+            File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(state, jsonOpts));
+
+            // Rename over the old file so readers never see a half-written document.
+            File.Move(tmp, ResultsPath, overwrite: true);
         }
 
         var seasonIndex = 0;
@@ -319,6 +335,12 @@ internal static class IntrosRunner
         {
             seasonIndex++;
             ct.ThrowIfCancellationRequested();
+
+            if (totalMissing == 0)
+            {
+                // Everything came from the cache; the season counter is the only progress.
+                _lastProgress = 100.0 * seasonIndex / seasons.Count;
+            }
 
             var queue = season.Where(j => j.Points is { Length: > 0 }).ToList();
             var missing = season.Where(j => j.Points is null).ToList();
@@ -352,6 +374,14 @@ internal static class IntrosRunner
             if (queue.Count < 2)
             {
                 continue;
+            }
+
+            // Replace this season's entries with fresh results (a match that disappeared
+            // must disappear from the results too); seasons not reached keep their old value.
+            var seasonPaths = new HashSet<string>(season.Select(j => j.Path), StringComparer.OrdinalIgnoreCase);
+            foreach (var stale in found.Keys.Where(k => seasonPaths.Contains(k)).ToList())
+            {
+                found.Remove(stale);
             }
 
             _lastMessage = $"season {seasonIndex}/{seasons.Count}: comparing {queue.Count} episode(s)";
@@ -442,8 +472,7 @@ internal static class IntrosRunner
         };
 
         var jobs = new List<Job>();
-        var seenShows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var seenShowDirs = new List<string>();
+        var seenDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var options = new EnumerationOptions
         {
@@ -461,33 +490,17 @@ internal static class IntrosRunner
 
             foreach (var showDir in Directory.EnumerateDirectories(folder, "*", options))
             {
-                var show = Path.GetFileName(showDir);
-                if (seenShows.Contains(show))
+                // Deduplicate by full path, never by leaf name: names like "Movie",
+                // "Specials" or "Season 1" repeat across trees, and a name-based check
+                // silently skipped every folder after the first with that name.
+                var dirKey = showDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!seenDirs.Add(dirKey))
                 {
                     continue;
                 }
 
-                // Skip folders that are an ancestor or descendant of one we already scanned
-                // (e.g. when the config lists both "/media/Series" and "/media/"), otherwise
-                // the same tree is compared against itself as one giant group.
-                var dirWithSep = showDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-                var covered = false;
-                foreach (var seen in seenShows)
-                {
-                    if (seen.StartsWith(dirWithSep, StringComparison.OrdinalIgnoreCase) ||
-                        dirWithSep.StartsWith(seen, StringComparison.OrdinalIgnoreCase))
-                    {
-                        covered = true;
-                        break;
-                    }
-                }
-
-                if (covered)
-                {
-                    continue;
-                }
-
-                foreach (var file in SafeEnumerateFiles(showDir, options))
+                var show = Path.GetFileName(dirKey);
+                foreach (var file in SafeEnumerateFiles(dirKey, options))
                 {
                     var ext = Path.GetExtension(file);
                     if (!videoExt.Contains(ext) || !seenFiles.Add(file))
@@ -512,9 +525,6 @@ internal static class IntrosRunner
                         SeasonKey = seasonKey
                     });
                 }
-
-                seenShows.Add(show);
-                seenShowDirs.Add(dirWithSep);
             }
         }
 

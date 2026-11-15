@@ -327,7 +327,8 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>
     /// Gets or sets how many minutes of audio at the start of each episode are fingerprinted
     /// when scanning for intros (default 4). Intros always live at the start; limiting the
-    /// window is what makes the scan much faster than fingerprinting whole episodes.
+    /// window is what makes the scan much faster than the official scanner's default
+    /// window (the first 25% of the file, up to 10 minutes).
     /// </summary>
     [XmlIgnore]
     public int IntroWindowMinutes
