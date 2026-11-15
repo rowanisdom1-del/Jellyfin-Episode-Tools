@@ -229,12 +229,21 @@ internal static class IntrosRunner
         var minDuration = Math.Clamp(cfg.IntroMinDuration, 5, 300);
         var maxDuration = Math.Clamp(cfg.IntroMaxDuration, minDuration, 600);
 
+        var folders = new List<string>(cfg.EffectiveRenameFolders);
+        foreach (var f in cfg.EffectiveConvertFolders)
+        {
+            if (!folders.Contains(f, StringComparer.OrdinalIgnoreCase))
+            {
+                folders.Add(f);
+            }
+        }
+
         // Every video file under every configured show folder, grouped per (show folder, season).
-        var jobs = EnumerateJobs(cfg);
+        var jobs = EnumerateJobs(folders);
         logger.LogInformation(
-            "[Episode Tools] Intro scan: {Jobs} episode(s) enumerated from {Folders} folder(s).",
+            "[Episode Tools] Intro scan: {Jobs} episode(s) enumerated. Folders: {Folders}",
             jobs.Count,
-            cfg.EffectiveRenameFolders.Count + cfg.EffectiveConvertFolders.Count);
+            string.Join(", ", folders));
         if (jobs.Count == 0)
         {
             logger.LogInformation("[Episode Tools] Intro scan found no episodes in the configured folders.");
@@ -379,17 +388,8 @@ internal static class IntrosRunner
         bounds[path] = (start, end);
     }
 
-    private static List<Job> EnumerateJobs(PluginConfiguration cfg)
+    private static List<Job> EnumerateJobs(List<string> folders)
     {
-        var folders = new List<string>(cfg.EffectiveRenameFolders);
-        foreach (var f in cfg.EffectiveConvertFolders)
-        {
-            if (!folders.Contains(f, StringComparer.OrdinalIgnoreCase))
-            {
-                folders.Add(f);
-            }
-        }
-
         var videoExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts"
