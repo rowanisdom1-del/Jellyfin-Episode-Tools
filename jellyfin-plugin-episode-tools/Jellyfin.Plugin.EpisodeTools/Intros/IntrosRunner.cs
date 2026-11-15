@@ -138,8 +138,8 @@ internal static class IntrosRunner
             return new
             {
                 running = Running,
-                message = Running ? _lastMessage : string.Empty,
-                progress = Running ? _lastProgress : 0.0
+                message = _lastMessage,
+                progress = _lastProgress
             };
         }
     }
@@ -231,8 +231,13 @@ internal static class IntrosRunner
 
         // Every video file under every configured show folder, grouped per (show folder, season).
         var jobs = EnumerateJobs(cfg);
+        logger.LogInformation(
+            "[Episode Tools] Intro scan: {Jobs} episode(s) enumerated from {Folders} folder(s).",
+            jobs.Count,
+            cfg.EffectiveRenameFolders.Count + cfg.EffectiveConvertFolders.Count);
         if (jobs.Count == 0)
         {
+            logger.LogInformation("[Episode Tools] Intro scan found no episodes in the configured folders.");
             _lastMessage = "no episodes found in the configured folders";
             return;
         }
@@ -282,6 +287,11 @@ internal static class IntrosRunner
         _lastMessage = "comparing episodes";
         var found = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
         var seasons = jobs.GroupBy(j => j.SeasonKey, StringComparer.OrdinalIgnoreCase);
+        logger.LogInformation(
+            "[Episode Tools] Intro scan: {Jobs} episode(s) in {Seasons} season group(s); {Missing} to fingerprint.",
+            jobs.Count,
+            seasons.Count(),
+            total);
 
         foreach (var season in seasons)
         {
