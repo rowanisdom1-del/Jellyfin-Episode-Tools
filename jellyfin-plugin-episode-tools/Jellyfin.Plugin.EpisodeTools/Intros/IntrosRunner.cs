@@ -55,7 +55,6 @@ internal static class IntrosRunner
         RegexOptions.Compiled);
 
     private static readonly object Lock = new();
-    private static Microsoft.Extensions.Logging.ILogger? _loggerForEnumeration;
     private static Task? _running;
     private static CancellationTokenSource? _cancellation;
     private static string _lastMessage = string.Empty;
@@ -240,7 +239,6 @@ internal static class IntrosRunner
         }
 
         // Every video file under every configured show folder, grouped per (show folder, season).
-        _loggerForEnumeration = logger;
         var jobs = EnumerateJobs(folders);
         logger.LogInformation(
             "[Episode Tools] Intro scan: {Jobs} episode(s) enumerated. Folders: {Folders}",
@@ -399,16 +397,17 @@ internal static class IntrosRunner
 
         var jobs = new List<Job>();
         var seenShows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var options = new EnumerationOptions { IgnoreInaccessible = true, RecurseSubdirectories = false };
+        var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var options = new EnumerationOptions
+        {
+            IgnoreInaccessible = true,
+            RecurseSubdirectories = true,
+            MaxRecursionDepth = 4
+        };
 
         foreach (var folder in folders)
         {
-            var exists = Directory.Exists(folder);
-            _loggerForEnumeration?.LogInformation(
-                "[Episode Tools] Intro scan folder \"{Folder}\": exists={Exists}",
-                folder,
-                exists);
-            if (!exists)
+            if (folder.Length == 0 || !Directory.Exists(folder))
             {
                 continue;
             }
@@ -416,21 +415,19 @@ internal static class IntrosRunner
             foreach (var showDir in Directory.EnumerateDirectories(folder, "*", options))
             {
                 var show = Path.GetFileName(showDir);
-                if (!seenShows.Add(show))
+                if (seenShows.Contains(show))
                 {
                     continue;
                 }
 
-                var files = SafeEnumerateFiles(showDir).ToList();
-                var videos = files.Where(f => videoExt.Contains(Path.GetExtension(f))).ToList();
-                _loggerForEnumeration?.LogInformation(
-                    "[Episode Tools] Intro scan show \"{Show}\": {Files} file(s), {Videos} video(s).",
-                    show,
-                    files.Count,
-                    videos.Count);
-
-                foreach (var file in videos)
+                foreach (var file in SafeEnumerateFiles(showDir, options))
                 {
+                    var ext = Path.GetExtension(file);
+                    if (!videoExt.Contains(ext) || !seenFiles.Add(file))
+                    {
+                        continue;
+                    }
+
                     var name = Path.GetFileName(file);
                     var m = SeasonRegex.Match(name);
                     var season = m.Success ? $"S{int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture):00}" : "S?";
@@ -443,17 +440,19 @@ internal static class IntrosRunner
                         SeasonKey = showDir + "|" + season
                     });
                 }
+
+                seenShows.Add(show);
             }
         }
 
         return jobs;
     }
 
-    private static IEnumerable<string> SafeEnumerateFiles(string dir)
+    private static IEnumerable<string> SafeEnumerateFiles(string dir, EnumerationOptions options)
     {
         try
         {
-            return Directory.EnumerateFiles(dir);
+            return Directory.EnumerateFiles(dir, "*", options);
         }
         catch (Exception)
         {
