@@ -32,13 +32,14 @@ internal static class ScriptRunner
             args.Add("--apply");
         }
 
-        var dir = (cfg.RenameDirectory ?? string.Empty).Trim();
-        if (dir.Length > 0)
+        var total = 0;
+        foreach (var dir in cfg.EffectiveRenameFolders)
         {
             args.Add(dir);
+            total += CountMediaFiles(dir);
         }
 
-        return RunAsync(logger, "python3", "rename_episodes.py", args, CountMediaFiles(dir), progress, cancellationToken);
+        return RunAsync(logger, "python3", "rename_episodes.py", args, total, progress, cancellationToken);
     }
 
     /// <summary>
@@ -95,6 +96,38 @@ internal static class ScriptRunner
 
         args.Add("--report");
         args.Add(reportPath);
+
+        // Per-show subtitle/audio preferences, read by the script to select and flag tracks.
+        var prefsPath = Path.Combine(
+            Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools"),
+            "show-prefs.txt");
+        try
+        {
+            var prefs = new StringBuilder();
+            foreach (var pref in cfg.ShowPreferences ?? new List<ShowPreference>())
+            {
+                var show = (pref.Show ?? string.Empty).Trim();
+                if (show.Length == 0)
+                {
+                    continue;
+                }
+
+                prefs.Append(show.Replace('\t', ' '))
+                    .Append('\t').Append((pref.SubtitleLanguage ?? string.Empty).Trim())
+                    .Append('\t').Append((pref.AudioLanguage ?? string.Empty).Trim())
+                    .Append('\n');
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(prefsPath)!);
+            File.WriteAllText(prefsPath, prefs.ToString(), Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] Could not write the show preferences file; conversion will use keep-all behavior.");
+        }
+
+        args.Add("--prefs");
+        args.Add(prefsPath);
 
         var total = 0;
         foreach (var dir in cfg.EffectiveConvertFolders)

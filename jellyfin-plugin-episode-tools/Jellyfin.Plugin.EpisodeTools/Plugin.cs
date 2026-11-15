@@ -67,5 +67,14 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 "{0}.Configuration.reportPage.html",
                 GetType().Namespace)
         };
+        yield return new PluginPageInfo
+        {
+            Name = "Episode Tools Shows",
+            DisplayName = "Episode Tools Shows",
+            EmbeddedResourcePath = string.Format(
+                CultureInfo.InvariantCulture,
+                "{0}.Configuration.showsPage.html",
+                GetType().Namespace)
+        };
     }
 }

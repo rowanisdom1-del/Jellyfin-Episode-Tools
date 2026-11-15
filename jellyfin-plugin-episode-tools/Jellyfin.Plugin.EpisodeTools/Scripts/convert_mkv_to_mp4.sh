@@ -24,6 +24,7 @@ FORCE=false
 AUDIO_TO_AAC=false
 FASTSTART=true
 REPORT_FILE=""
+PREFS_FILE=""
 FOLDERS=()
 
 usage() {
@@ -47,6 +48,9 @@ Options:
   --no-faststart       Skip the faststart optimization (moving the MP4 index to the
                        front of the file). Faster conversion, half the writes.
                        Jellyfin streams with range requests and works fine without it.
+  --prefs FILE         Per-show track preferences, one line per show:
+                       show <tab> subtitle-lang <tab> audio-lang.
+                       Empty language = keep all; "none" subtitles = drop them.
   -h, --help           Show this help.
 
 Existing MP4s are never overwritten. Text subtitles are converted to mov_text;
@@ -61,6 +65,14 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=true ;;
     --audio-to-aac) AUDIO_TO_AAC=true ;;
     --no-faststart) FASTSTART=false ;;
+    --prefs)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--prefs needs a file path (see --help)." >&2
+        exit 1
+      fi
+      PREFS_FILE=$2
+      shift
+      ;;
     --report)
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "--report needs a file path (see --help)." >&2
@@ -110,6 +122,56 @@ report() {
   printf 'CANNOT\t%s\t%s\n' "$1" "$2" >> "$REPORT_FILE" 2>/dev/null || true
 }
 
+# ---- per-show subtitle/audio preferences (Episode Tools Shows page) ----
+PREF_SHOW=(); PREF_SUB=(); PREF_AUD=()
+if [[ -n "$PREFS_FILE" && -f "$PREFS_FILE" ]]; then
+  while IFS=$'\t' read -r s sub aud; do
+    [[ -n "$s" ]] || continue
+    PREF_SHOW+=("$s"); PREF_SUB+=("${sub:-}"); PREF_AUD+=("${aud:-}")
+  done < "$PREFS_FILE"
+fi
+
+# lang_matches <stream-lang> <pref-lang>: true when the stream matches the preference.
+lang_matches() {
+  local s="${1,,}" p="${2,,}"
+  [[ -n "$p" && "$p" != "none" ]] || return 1
+  [[ "$s" == "$p" ]] && return 0
+  case "$p:$s" in
+    nl:nld|en:eng|de:ger|de:deu|fr:fre|fr:fra|es:spa|it:ita|ja:jpn|ko:kor|\
+zh:zho|zh:chi|pt:por|ru:rus|sv:swe|pl:pol|tr:tur|ar:ara) return 0 ;;
+  esac
+  [[ ${#p} -eq 2 && "$s" == "$p"* ]] && return 0
+  return 1
+}
+
+# get_show_pref <show-name>: sets SUBPREF and AUDPREF (empty = keep all).
+get_show_pref() {
+  SUBPREF=""
+  AUDPREF=""
+  local want="${1,,}" i
+  for i in "${!PREF_SHOW[@]}"; do
+    if [[ "${PREF_SHOW[$i],,}" == "$want" ]]; then
+      SUBPREF="${PREF_SUB[$i]:-}"
+      AUDPREF="${PREF_AUD[$i]:-}"
+      return 0
+    fi
+  done
+}
+
+# show_name_for <file-path>: the show is the first folder under the scanned folder.
+show_name_for() {
+  local p=$1 base rel
+  for base in "${FOLDERS[@]}"; do
+    base="${base%/}/"
+    if [[ "$p/" == "$base"* ]]; then
+      rel="${p#"$base"}"
+      printf '%s' "${rel%%/*}"
+      return 0
+    fi
+  done
+  printf '%s' "$(basename "$(dirname "$p")")"
+}
+
 if ! command -v ffmpeg >/dev/null 2>&1 ||
    ! command -v ffprobe >/dev/null 2>&1; then
   echo "ffmpeg and ffprobe are required. Install them with: sudo apt install ffmpeg" >&2
@@ -145,12 +207,12 @@ trap cleanup EXIT
 trap 'echo; echo "Interrupted; cleaning up the unfinished file."; exit 130' INT TERM HUP
 
 # Populated by probe():
-# VCOUNT, VCODECS[], VIDEO_MAPS[], ACOUNT, ACODECS[], AUDIO_MAPS[],
+# VCOUNT, VCODECS[], VIDEO_MAPS[], ACOUNT, ACODECS[], AUDIO_MAPS[], ALANGS[],
 # SUBCOUNT, SUB_MAPS[], PIC_SUBS
 #
 # SUBCOUNT counts only text subtitle streams mapped into the MP4.
 probe() {
-  local input=$1 out line idx codec type channels
+  local input=$1 out line idx codec type channels language
   VCOUNT=0
   ACOUNT=0
   SUBCOUNT=0
@@ -158,12 +220,16 @@ probe() {
   VCODECS=()
   ACODECS=()
   ACHANNELS=()
+  ALANGS=()
+  AUDIO_INDICES=()
+  SUB_INDICES=()
+  SLANGS=()
   VIDEO_MAPS=()
   AUDIO_MAPS=()
   SUB_MAPS=()
 
   out=$(ffprobe -v error \
-    -show_entries stream=index,codec_name,codec_type,channels \
+    -show_entries stream=index,codec_name,codec_type,channels:stream_tags=language \
     -of compact=p=0:nk=0 -i "$input" 2>/dev/null) || return 1
   [[ -n "$out" ]] || return 1
 
@@ -172,11 +238,14 @@ probe() {
     codec=""
     type=""
     channels=""
+    language=""
 
     [[ $line =~ index=([0-9]+) ]] && idx=${BASH_REMATCH[1]}
     [[ $line =~ codec_name=([^|]+) ]] && codec=${BASH_REMATCH[1]}
     [[ $line =~ codec_type=([a-z]+) ]] && type=${BASH_REMATCH[1]}
     [[ $line =~ channels=([0-9]+) ]] && channels=${BASH_REMATCH[1]}
+    # ffprobe prints stream tags as tag:language=xxx (some versions as language=xxx).
+    [[ $line =~ language=([a-z0-9]+) ]] && language=${BASH_REMATCH[1]}
 
     [[ -n "$idx" && -n "$codec" ]] || continue
 
@@ -196,12 +265,16 @@ probe() {
         ACOUNT=$((ACOUNT + 1))
         ACODECS+=("$codec")
         ACHANNELS+=("${channels:-2}")
+        ALANGS+=("${language:-und}")
+        AUDIO_INDICES+=("$idx")
         AUDIO_MAPS+=(-map "0:$idx")
         ;;
       subtitle)
         case "$codec" in
           subrip|srt|ass|ssa|webvtt|mov_text|text)
             SUBCOUNT=$((SUBCOUNT + 1))
+            SUB_INDICES+=("$idx")
+            SLANGS+=("${language:-und}")
             SUB_MAPS+=(-map "0:$idx")
             ;;
           *)
@@ -352,6 +425,53 @@ while IFS= read -r -d '' src; do
     continue
   fi
 
+  # ---- per-show track selection (Episode Tools Shows page) ----
+  show=$(show_name_for "$src")
+  get_show_pref "$show"
+  set_default_disposition=false
+
+  if [[ -n "$SUBPREF" ]]; then
+    if [[ "$SUBPREF" == "none" ]]; then
+      echo "  Show preference ($show): dropping subtitles."
+      SUB_MAPS=(); SUBCOUNT=0
+      set_default_disposition=true
+    else
+      new_sub_maps=(); kept=0
+      for i in "${!SUB_INDICES[@]}"; do
+        if lang_matches "${SLANGS[$i]}" "$SUBPREF"; then
+          new_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
+          kept=$((kept + 1))
+        fi
+      done
+      SUB_MAPS=("${new_sub_maps[@]}")
+      SUBCOUNT=$kept
+      echo "  Show preference ($show): keeping only '$SUBPREF' subtitles ($kept of ${#SUB_INDICES[@]} found)."
+      set_default_disposition=true
+    fi
+  fi
+
+  if [[ -n "$AUDPREF" ]]; then
+    new_audio_maps=(); new_acodecs=(); new_achannels=(); new_unsafe=""; kept=0
+    for i in "${!AUDIO_INDICES[@]}"; do
+      if lang_matches "${ALANGS[$i]}" "$AUDPREF"; then
+        new_audio_maps+=(-map "0:${AUDIO_INDICES[$i]}")
+        new_acodecs+=("${ACODECS[$i]}")
+        new_achannels+=("${ACHANNELS[$i]}")
+        kept=$((kept + 1))
+      fi
+    done
+    if (( kept > 0 )); then
+      AUDIO_MAPS=("${new_audio_maps[@]}")
+      ACODECS=("${new_acodecs[@]}")
+      ACHANNELS=("${new_achannels[@]}")
+      ACOUNT=$kept
+      echo "  Show preference ($show): keeping only '$AUDPREF' audio ($kept track(s))."
+      set_default_disposition=true
+    else
+      echo "  Show preference ($show): no '$AUDPREF' audio track found; keeping all audio."
+    fi
+  fi
+
   unsafe=""
   for codec in "${VCODECS[@]}"; do
     if ! is_safe_codec video "$codec"; then
@@ -381,6 +501,18 @@ while IFS= read -r -d '' src; do
   done
   if ! $AUDIO_TO_AAC; then
     unsafe+="$unsafe_audio"
+  fi
+
+  # When a per-show preference exists, flag the first audio and first subtitle
+  # track as the default for players.
+  disp_args=()
+  if $set_default_disposition; then
+    if (( ${#AUDIO_MAPS[@]} > 0 )); then
+      disp_args+=(-disposition:a:0 default)
+    fi
+    if (( ${#SUB_MAPS[@]} > 0 )); then
+      disp_args+=(-disposition:s:0 default)
+    fi
   fi
 
   if [[ -n "$unsafe" ]] && ! $FORCE; then
@@ -433,6 +565,7 @@ while IFS= read -r -d '' src; do
       -map_metadata 0 -map_chapters 0 \
       -c copy -c:s mov_text \
       "${audio_args[@]}" \
+      "${disp_args[@]}" \
       "${movflags[@]}" -f mp4 "$tmp"; then
     echo "  Failed: ffmpeg could not create the MP4."
     report "$src" "ffmpeg failed to create the MP4 (see Dashboard > Logs for the ffmpeg error)"

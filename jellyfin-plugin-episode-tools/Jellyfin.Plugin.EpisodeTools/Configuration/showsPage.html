@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Episode Tools Shows</title>
+</head>
+<body>
+<div id="EpisodeToolsShowsPage" data-role="page" class="page type-interior">
+    <div data-role="content">
+        <div class="content-primary">
+            <h2>Episode Tools — Shows</h2>
+            <p>Every show found in your series/scan folders. Choose the <b>default subtitle language</b> and
+            <b>default audio language</b> per show. These apply the next time that show is converted:
+            matching tracks are kept and flagged as the default for players.</p>
+            <div id="ShowsInfo" class="fieldDescription" style="margin-bottom:1em;"></div>
+            <table class="tblDataTable detailTable" style="width:100%;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left;">Show</th>
+                        <th>Episodes</th>
+                        <th>.mkv</th>
+                        <th>Subs found</th>
+                        <th style="text-align:left;">Default subtitles</th>
+                        <th style="text-align:left;">Default audio</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="ShowsBody">
+                    <tr><td colspan="7">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <script type="text/javascript">
+        (function () {
+            var SUB_OPTIONS = [
+                ['', 'Keep all subtitles'],
+                ['none', 'Drop subtitles'],
+                ['nl', 'Dutch (nl)'], ['en', 'English (en)'], ['de', 'German (de)'],
+                ['fr', 'French (fr)'], ['es', 'Spanish (es)'], ['it', 'Italian (it)'],
+                ['ja', 'Japanese (ja)'], ['ko', 'Korean (ko)'], ['pt', 'Portuguese (pt)'],
+                ['ru', 'Russian (ru)'], ['sv', 'Swedish (sv)'], ['pl', 'Polish (pl)']
+            ];
+            var AUD_OPTIONS = [
+                ['', 'Keep all audio'],
+                ['nl', 'Dutch (nl)'], ['en', 'English (en)'], ['de', 'German (de)'],
+                ['fr', 'French (fr)'], ['es', 'Spanish (es)'], ['it', 'Italian (it)'],
+                ['ja', 'Japanese (ja)'], ['ko', 'Korean (ko)'], ['pt', 'Portuguese (pt)']
+            ];
+
+            function fillSelect(sel, options, current) {
+                sel.innerHTML = '';
+                for (var i = 0; i < options.length; i++) {
+                    var opt = document.createElement('option');
+                    opt.value = options[i][0];
+                    opt.textContent = options[i][1];
+                    sel.appendChild(opt);
+                }
+                var has = false;
+                for (var j = 0; j < sel.options.length; j++) {
+                    if (sel.options[j].value === current) { has = true; break; }
+                }
+                sel.value = has ? current : '';
+            }
+
+            function savePref(show, sub, aud, btn) {
+                btn.disabled = true;
+                btn.textContent = '…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/ShowPrefs'),
+                    dataType: 'text',
+                    data: JSON.stringify({ show: show, sub: sub, aud: aud }),
+                    contentType: 'application/json'
+                }).then(function () {
+                    btn.textContent = 'Saved ✓';
+                    setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 1500);
+                }).catch(function () {
+                    btn.textContent = 'Failed ✗';
+                    setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 2500);
+                });
+            }
+
+            document.querySelector('#EpisodeToolsShowsPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    Promise.all([
+                        ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/Shows'), dataType: 'json' }),
+                        ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/ShowPrefs'), dataType: 'json' })
+                    ]).then(function (results) {
+                        var data = results[0];
+                        var prefData = results[1] || { prefs: [] };
+                        var prefs = {};
+                        (prefData.prefs || []).forEach(function (p) {
+                            prefs[(p.show || '').toLowerCase()] = { sub: p.sub || '', aud: p.aud || '' };
+                        });
+
+                        var body = document.querySelector('#ShowsBody');
+                        body.innerHTML = '';
+                        var shows = data.shows || [];
+                        document.querySelector('#ShowsInfo').textContent =
+                            shows.length + ' show(s) found' + (data.foldersScanned ? ' in ' + data.foldersScanned + ' folder(s).' : '.');
+
+                        shows.forEach(function (s) {
+                            var saved = prefs[(s.name || '').toLowerCase()] || { sub: '', aud: '' };
+                            var tr = document.createElement('tr');
+
+                            var tdName = document.createElement('td');
+                            tdName.textContent = s.name;
+                            tdName.style.wordBreak = 'break-all';
+                            tr.appendChild(tdName);
+
+                            var tdEp = document.createElement('td');
+                            tdEp.textContent = s.episodes;
+                            tdEp.style.textAlign = 'center';
+                            tr.appendChild(tdEp);
+
+                            var tdMkv = document.createElement('td');
+                            tdMkv.textContent = s.mkv;
+                            tdMkv.style.textAlign = 'center';
+                            tr.appendChild(tdMkv);
+
+                            var tdLangs = document.createElement('td');
+                            tdLangs.textContent = (s.subLangs && s.subLangs.length ? s.subLangs.join(', ') : '—');
+                            tdLangs.style.textAlign = 'center';
+                            tr.appendChild(tdLangs);
+
+                            var tdSub = document.createElement('td');
+                            var selSub = document.createElement('select');
+                            selSub.className = 'selectEpisodeTools';
+                            fillSelect(selSub, SUB_OPTIONS, saved.sub);
+                            tdSub.appendChild(selSub);
+                            tr.appendChild(tdSub);
+
+                            var tdAud = document.createElement('td');
+                            var selAud = document.createElement('select');
+                            selAud.className = 'selectEpisodeTools';
+                            fillSelect(selAud, AUD_OPTIONS, saved.aud);
+                            tdAud.appendChild(selAud);
+                            tr.appendChild(tdAud);
+
+                            var tdBtn = document.createElement('td');
+                            var btn = document.createElement('button');
+                            btn.setAttribute('is', 'emby-button');
+                            btn.className = 'raised button-mini emby-button';
+                            btn.textContent = saved.sub || saved.aud ? 'Update' : 'Save';
+                            btn.addEventListener('click', function () {
+                                savePref(s.name, selSub.value, selAud.value, btn);
+                            });
+                            tdBtn.appendChild(btn);
+                            tr.appendChild(tdBtn);
+
+                            body.appendChild(tr);
+                        });
+
+                        if (shows.length === 0) {
+                            body.innerHTML = '<tr><td colspan="7">No shows found — check the folders on the Episode Tools settings page.</td></tr>';
+                        }
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function () {
+                        document.querySelector('#ShowsBody').innerHTML =
+                            '<tr><td colspan="7">Could not load the shows. Is plugin v1.4.0+ installed?</td></tr>';
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+        })();
+    </script>
+</div>
+</body>
+</html>

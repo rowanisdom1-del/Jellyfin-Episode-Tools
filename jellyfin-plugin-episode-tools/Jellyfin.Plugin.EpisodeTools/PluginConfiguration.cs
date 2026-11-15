@@ -23,9 +23,62 @@ public class PluginConfiguration : BasePluginConfiguration
     }
 
     /// <summary>
-    /// Gets or sets the folder that contains one sub folder per series.
+    /// Gets or sets the folder that contains one sub folder per series. Kept for compatibility
+    /// with configurations from earlier versions; it is only used when the RenameFolders list
+    /// below is empty.
     /// </summary>
     public string RenameDirectory { get; set; }
+
+    /// <summary>
+    /// Gets the folders that contain one sub folder per series. Edited as up to five inputs on
+    /// the settings page. When every entry is empty, RenameDirectory is used instead.
+    /// </summary>
+    [XmlElement("RenameFolder")]
+    public List<string> RenameFolders { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Returns the effective list of series folders, trimming empty entries and falling back to
+    /// the old single-folder setting for configurations saved by earlier versions.
+    /// </summary>
+    [XmlIgnore]
+    public IReadOnlyList<string> EffectiveRenameFolders
+    {
+        get
+        {
+            var result = new List<string>();
+            if (RenameFolders is not null)
+            {
+                foreach (var folder in RenameFolders)
+                {
+                    var trimmed = (folder ?? string.Empty).Trim();
+                    if (trimmed.Length > 0 && !result.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                    {
+                        result.Add(trimmed);
+                    }
+                }
+            }
+
+            if (result.Count == 0)
+            {
+                var legacy = (RenameDirectory ?? string.Empty).Trim();
+                if (legacy.Length > 0)
+                {
+                    result.Add(legacy);
+                }
+            }
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Per-show track preferences, edited on the Episode Tools Shows page. SubtitleLanguage is
+    /// "" (keep all), "none" (drop subtitles) or a language code. AudioLanguage is "" (keep all)
+    /// or a language code; matching audio is kept and flagged as default, with a safety fallback
+    /// that never removes every audio track.
+    /// </summary>
+    [XmlElement("Preference")]
+    public List<ShowPreference> ShowPreferences { get; set; } = new List<ShowPreference>();
 
     /// <summary>
     /// Gets or sets the folder that is searched (including sub folders) for .mkv files.

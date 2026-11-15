@@ -137,11 +137,9 @@ def new_name(show, parent_dirs, fname):
     return f"{base}{lang}.{ext}"
 
 
-def main():
-    args = sys.argv[1:]
-    apply = "--apply" in args
-    paths = [a for a in args if not a.startswith("--")]
-    series = paths[0] if paths else SERIES_DIR
+def process(series, apply, claimed):
+    """Walks one series folder; returns (renamed, skipped, unmatched) for it."""
+    renamed = skipped = unmatched = 0
 
     if not os.path.isdir(series):
         print(f"Folder {series} not found.")
@@ -152,14 +150,7 @@ def main():
                 print("  " + item)
         else:
             print("Is the drive mounted?")
-        sys.exit(1)
-
-    print("=== APPLY MODE: files will be renamed ===" if apply
-          else "=== DRY RUN: nothing will be changed (use --apply to rename) ===")
-    print()
-
-    renamed = skipped = unmatched = 0
-    claimed = set()
+        return 0, 0, 1
 
     for root, dirs, files in os.walk(series):
         dirs.sort()
@@ -193,6 +184,29 @@ def main():
             if apply:
                 os.rename(src, dst)
             renamed += 1
+
+    return renamed, skipped, unmatched
+
+
+def main():
+    args = sys.argv[1:]
+    apply = "--apply" in args
+    series_list = [a for a in args if not a.startswith("--")]
+    if not series_list:
+        series_list = [SERIES_DIR]
+
+    print("=== APPLY MODE: files will be renamed ===" if apply
+          else "=== DRY RUN: nothing will be changed (use --apply to rename) ===")
+    print()
+
+    renamed = skipped = unmatched = 0
+    claimed = set()
+
+    for series in series_list:
+        r, s, u = process(series, apply, claimed)
+        renamed += r
+        skipped += s
+        unmatched += u
 
     print()
     print(f"Done. To rename: {renamed} | already correct/skipped: {skipped} | not recognised: {unmatched}")

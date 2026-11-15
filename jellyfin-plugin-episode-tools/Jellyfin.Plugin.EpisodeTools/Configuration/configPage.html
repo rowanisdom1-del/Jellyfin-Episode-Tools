@@ -9,12 +9,28 @@
     <div data-role="content">
         <div class="content-primary">
             <h2>Episode Tools</h2>
-            <p>The tasks are under Dashboard &gt; Scheduled Tasks &gt; Episode Tools. The output of each run is in Dashboard &gt; Logs.</p>
+            <p>The tasks are under Dashboard &gt; Scheduled Tasks &gt; Episode Tools. The output of each run is in Dashboard &gt; Logs. Per-show subtitle/audio defaults are on the <b>Episode Tools Shows</b> page; convert problems are on the <b>Episode Tools Report</b> page.</p>
             <form id="EpisodeToolsConfigForm">
                 <div class="inputContainer">
-                    <label class="inputLabel inputLabelUnfocused" for="RenameDirectory">Series folder (for renaming)</label>
-                    <input id="RenameDirectory" name="RenameDirectory" type="text" is="emby-input" />
-                    <div class="fieldDescription">Must be the folder that directly contains one sub folder per series, for example /mnt/storage/media/Series. Do not point this at the whole media folder: the first folder name would be used as the show name.</div>
+                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder1">Series folder 1 (for renaming)</label>
+                    <input id="RenameFolder1" name="RenameFolder1" type="text" is="emby-input" />
+                    <div class="fieldDescription">Must be a folder that directly contains one sub folder per series. You can set up to five series folders (below); leave the rest empty. Do not point this at the whole media folder: the first folder name would be used as the show name.</div>
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder2">Series folder 2 (optional)</label>
+                    <input id="RenameFolder2" name="RenameFolder2" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder3">Series folder 3 (optional)</label>
+                    <input id="RenameFolder3" name="RenameFolder3" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder4">Series folder 4 (optional)</label>
+                    <input id="RenameFolder4" name="RenameFolder4" type="text" is="emby-input" />
+                </div>
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="RenameFolder5">Series folder 5 (optional)</label>
+                    <input id="RenameFolder5" name="RenameFolder5" type="text" is="emby-input" />
                 </div>
                 <div class="inputContainer">
                     <label class="inputLabel inputLabelUnfocused" for="ScanFolder1">Scan folder 1 (for converting .mkv to .mp4)</label>
@@ -76,7 +92,10 @@
             .addEventListener('pageshow', function () {
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(EpisodeToolsConfig.pluginUniqueId).then(function (config) {
-                    document.querySelector('#RenameDirectory').value = config.RenameDirectory || '';
+                    var renameFolders = config.RenameFolders || [];
+                    for (var r = 1; r <= 5; r++) {
+                        document.querySelector('#RenameFolder' + r).value = renameFolders[r - 1] || '';
+                    }
                     var folders = config.ConvertFolders || [];
                     for (var i = 1; i <= 5; i++) {
                         document.querySelector('#ScanFolder' + i).value = folders[i - 1] || '';
@@ -92,7 +111,14 @@
             .addEventListener('submit', function (e) {
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(EpisodeToolsConfig.pluginUniqueId).then(function (config) {
-                    config.RenameDirectory = document.querySelector('#RenameDirectory').value.trim();
+                    var renameFolders = [];
+                    for (var r = 1; r <= 5; r++) {
+                        var rValue = document.querySelector('#RenameFolder' + r).value.trim();
+                        if (rValue) {
+                            renameFolders.push(rValue);
+                        }
+                    }
+                    config.RenameFolders = renameFolders;
                     var folders = [];
                     for (var i = 1; i <= 5; i++) {
                         var value = document.querySelector('#ScanFolder' + i).value.trim();
