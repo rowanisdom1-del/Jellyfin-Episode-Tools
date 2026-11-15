@@ -23,6 +23,8 @@ DELETE=false
 FORCE=false
 AUDIO_TO_AAC=false
 FASTSTART=true
+DROP_SIGNS_SONGS=false
+REDO=false
 REPORT_FILE=""
 PREFS_FILE=""
 FOLDERS=()
@@ -51,6 +53,10 @@ Options:
   --prefs FILE         Per-show track preferences, one line per show:
                        show <tab> subtitle-lang <tab> audio-lang.
                        Empty language = keep all; "none" subtitles = drop them.
+  --drop-signs-songs   Drop subtitle tracks whose title says signs/songs/lyrics/karaoke
+                       (typical anime tracks) as long as another dialogue track exists.
+  --redo               Also convert files whose .mp4 already exists and REPLACE the
+                       .mp4 after verification. Use after changing preferences/settings.
   -h, --help           Show this help.
 
 Existing MP4s are never overwritten. Text subtitles are converted to mov_text;
@@ -65,6 +71,8 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=true ;;
     --audio-to-aac) AUDIO_TO_AAC=true ;;
     --no-faststart) FASTSTART=false ;;
+    --drop-signs-songs) DROP_SIGNS_SONGS=true ;;
+    --redo) REDO=true ;;
     --prefs)
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "--prefs needs a file path (see --help)." >&2
@@ -212,7 +220,7 @@ trap 'echo; echo "Interrupted; cleaning up the unfinished file."; exit 130' INT 
 #
 # SUBCOUNT counts only text subtitle streams mapped into the MP4.
 probe() {
-  local input=$1 out line idx codec type channels language
+  local input=$1 out line idx codec type channels language title
   VCOUNT=0
   ACOUNT=0
   SUBCOUNT=0
@@ -224,12 +232,13 @@ probe() {
   AUDIO_INDICES=()
   SUB_INDICES=()
   SLANGS=()
+  STITLES=()
   VIDEO_MAPS=()
   AUDIO_MAPS=()
   SUB_MAPS=()
 
   out=$(ffprobe -v error \
-    -show_entries stream=index,codec_name,codec_type,channels:stream_tags=language \
+    -show_entries stream=index,codec_name,codec_type,channels:stream_tags=language,title:stream_disposition=default \
     -of compact=p=0:nk=0 -i "$input" 2>/dev/null) || return 1
   [[ -n "$out" ]] || return 1
 
@@ -239,13 +248,15 @@ probe() {
     type=""
     channels=""
     language=""
+    title=""
 
     [[ $line =~ index=([0-9]+) ]] && idx=${BASH_REMATCH[1]}
     [[ $line =~ codec_name=([^|]+) ]] && codec=${BASH_REMATCH[1]}
     [[ $line =~ codec_type=([a-z]+) ]] && type=${BASH_REMATCH[1]}
     [[ $line =~ channels=([0-9]+) ]] && channels=${BASH_REMATCH[1]}
-    # ffprobe prints stream tags as tag:language=xxx (some versions as language=xxx).
+    # ffprobe prints stream tags as tag:language=xxx / tag:title=... (some versions without prefix).
     [[ $line =~ language=([a-z0-9]+) ]] && language=${BASH_REMATCH[1]}
+    [[ $line =~ title=([^|]+) ]] && title=${BASH_REMATCH[1]}
 
     [[ -n "$idx" && -n "$codec" ]] || continue
 
@@ -275,6 +286,7 @@ probe() {
             SUBCOUNT=$((SUBCOUNT + 1))
             SUB_INDICES+=("$idx")
             SLANGS+=("${language:-und}")
+            STITLES+=("$title")
             SUB_MAPS+=(-map "0:$idx")
             ;;
           *)
@@ -388,7 +400,7 @@ while IFS= read -r -d '' src; do
   echo
   echo "File: $src"
 
-  if [[ -e "$out" || -L "$out" ]]; then
+  if [[ -e "$out" || -L "$out" ]] && ! $REDO; then
     echo "  Skipping: destination already exists: $out"
     report "$src" "destination already exists: $out"
     skipped=$((skipped + 1))
@@ -433,20 +445,54 @@ while IFS= read -r -d '' src; do
   if [[ -n "$SUBPREF" ]]; then
     if [[ "$SUBPREF" == "none" ]]; then
       echo "  Show preference ($show): dropping subtitles."
-      SUB_MAPS=(); SUBCOUNT=0
+      SUB_MAPS=(); SUB_INDICES=(); SLANGS=(); STITLES=(); SUBCOUNT=0
       set_default_disposition=true
     else
-      new_sub_maps=(); kept=0
+      orig_sub_count=${#SUB_INDICES[@]}
+      new_sub_maps=(); new_sub_indices=(); new_sub_langs=(); new_sub_titles=(); kept=0
       for i in "${!SUB_INDICES[@]}"; do
         if lang_matches "${SLANGS[$i]}" "$SUBPREF"; then
           new_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
+          new_sub_indices+=("${SUB_INDICES[$i]}")
+          new_sub_langs+=("${SLANGS[$i]}")
+          new_sub_titles+=("${STITLES[$i]:-}")
           kept=$((kept + 1))
         fi
       done
       SUB_MAPS=("${new_sub_maps[@]}")
+      SUB_INDICES=("${new_sub_indices[@]}")
+      SLANGS=("${new_sub_langs[@]}")
+      STITLES=("${new_sub_titles[@]}")
       SUBCOUNT=$kept
-      echo "  Show preference ($show): keeping only '$SUBPREF' subtitles ($kept of ${#SUB_INDICES[@]} found)."
+      echo "  Show preference ($show): keeping only '$SUBPREF' subtitles ($kept of $orig_sub_count found)."
       set_default_disposition=true
+    fi
+  fi
+
+  # ---- drop signs/songs/lyrics subtitle tracks (keep dialogue) ----
+  if $DROP_SIGNS_SONGS && (( ${#SUB_INDICES[@]} > 1 )); then
+    kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
+    dropped=""
+    for i in "${!SUB_INDICES[@]}"; do
+      t="${STITLES[$i]:-}"
+      if [[ "${t,,}" =~ (signs|songs|song|lyrics|karaoke|titles|credits) ]]; then
+        dropped+=" '${t}'"
+      else
+        kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
+        kept_sub_indices+=("${SUB_INDICES[$i]}")
+        kept_sub_langs+=("${SLANGS[$i]}")
+        kept_sub_titles+=("$t")
+      fi
+    done
+    if [[ -n "$dropped" ]] && (( ${#kept_sub_maps[@]} > 0 )); then
+      SUB_MAPS=("${kept_sub_maps[@]}")
+      SUB_INDICES=("${kept_sub_indices[@]}")
+      SLANGS=("${kept_sub_langs[@]}")
+      STITLES=("${kept_sub_titles[@]}")
+      SUBCOUNT=${#SUB_INDICES[@]}
+      echo "  Dropping signs/songs subtitle track(s):$dropped"
+    elif [[ -n "$dropped" ]]; then
+      echo "  Note: only signs/songs subtitle track(s) exist; keeping them."
     fi
   fi
 
@@ -585,8 +631,19 @@ while IFS= read -r -d '' src; do
   fi
 
   # -n prevents overwriting a destination created by another process.
-  if ! mv -nT -- "$tmp" "$out" || [[ -e "$tmp" ]]; then
+  if $REDO; then
+    if ! mv -fT -- "$tmp" "$out"; then
+      echo "  Failed: could not replace the existing .mp4."
+      report "$src" "could not replace the existing .mp4"
+      rm -f -- "$tmp"
+      CURRENT_TMP=""
+      failed=$((failed + 1))
+      continue
+    fi
+    echo "  Replaced: $out"
+  elif ! mv -nT -- "$tmp" "$out" || [[ -e "$tmp" ]]; then
     echo "  Failed: could not move verified output without overwriting."
+    report "$src" "could not move verified output without overwriting"
     rm -f -- "$tmp"
     CURRENT_TMP=""
     failed=$((failed + 1))

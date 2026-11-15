@@ -75,6 +75,13 @@
                     </label>
                     <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
                 </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="DropSignsSongs" name="DropSignsSongs" type="checkbox" is="emby-checkbox" />
+                        <span>Drop signs/songs/lyrics subtitle tracks when converting</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">On: subtitle tracks titled signs, songs, lyrics, karaoke or titles are left out of the MP4 when a dialogue track exists — players otherwise show song lyrics flashing over the picture. Off: all tracks are kept. Check which episodes are affected on the Episode Tools Sub Check page.</div>
+                </div>
                 <div>
                     <button is="emby-button" type="submit" class="raised button-submit block emby-button">
                         <span>Save</span>
@@ -103,6 +110,7 @@
                     document.querySelector('#DeleteOriginalsAfterConvert').checked = !!config.DeleteOriginalsAfterConvert;
                     document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
                     document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
+                    document.querySelector('#DropSignsSongs').checked = config.DropSignsSongs !== false;
                     Dashboard.hideLoadingMsg();
                 });
             });
@@ -130,6 +138,7 @@
                     config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
                     config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
                     config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
+                    config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
                     ApiClient.updatePluginConfiguration(EpisodeToolsConfig.pluginUniqueId, config).then(function (result) {
                         Dashboard.processPluginConfigurationUpdateResult(result);
                     });

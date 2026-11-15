@@ -135,6 +135,35 @@ public class PluginConfiguration : BasePluginConfiguration
     private string _deleteOriginalsAfterConvert;
     private string _convertUnusualAudioToAac;
     private string _faststartOptimize = "true";
+    private string _dropSignsSongs = "true";
+
+    /// <summary>
+    /// Raw serialized value for DropSignsSongs. Kept as string for tolerant deserialization.
+    /// The XML element name is preserved.
+    /// </summary>
+    [XmlElement("DropSignsSongs")]
+    public string DropSignsSongsRaw
+    {
+        get => _dropSignsSongs;
+        set => _dropSignsSongs = value ?? "true";
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether subtitle tracks whose title suggests they contain
+    /// signs, songs, lyrics or karaoke (typical anime tracks) are dropped during conversion when a
+    /// dialogue track exists. On by default: players otherwise often show the lyrics track.
+    /// This boolean accessor is XmlIgnored and parses many common textual representations.
+    /// </summary>
+    [XmlIgnore]
+    public bool DropSignsSongs
+    {
+        get
+        {
+            var s = (_dropSignsSongs ?? "true").Trim().ToLowerInvariant();
+            return !(s == "false" || s == "0" || s == "no" || s == "n" || s == "off");
+        }
+        set => _dropSignsSongs = value ? "true" : "false";
+    }
 
     /// <summary>
     /// Raw serialized value for FaststartOptimize. Kept as string for tolerant deserialization.

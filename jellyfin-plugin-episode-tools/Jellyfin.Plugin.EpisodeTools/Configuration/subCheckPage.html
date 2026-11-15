@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Episode Tools Sub Check</title>
+</head>
+<body>
+<div id="EpisodeToolsSubCheckPage" data-role="page" class="page type-interior">
+    <div data-role="content">
+        <div class="content-primary">
+            <h2>Episode Tools — Sub Check</h2>
+            <p>Result of the latest <b>5. Check subtitles</b> task: every episode whose subtitles
+            look wrong (signs/songs/lyrics tracks flagged as default, lyrics-heavy content, timing
+            that flashes for ~0.5s) and why.</p>
+            <div id="SubCheckInfo" class="fieldDescription" style="margin-bottom:1em;"></div>
+            <table class="tblDataTable detailTable" style="width:100%;">
+                <thead>
+                    <tr>
+                        <th style="text-align:left;">Episode / file</th>
+                        <th style="text-align:left;">Finding</th>
+                    </tr>
+                </thead>
+                <tbody id="SubCheckBody">
+                    <tr><td colspan="2">Loading…</td></tr>
+                </tbody>
+            </table>
+            <div class="fieldDescription" style="margin-top:1em;">
+                Fix options: enable <b>Drop signs/songs subtitle tracks</b> in the settings and run
+                <b>6. Re-convert MKV to MP4 (replaces existing .mp4)</b>; or set per-show subtitle/audio
+                defaults on the <b>Episode Tools Shows</b> page and re-convert.
+            </div>
+        </div>
+    </div>
+    <script type="text/javascript">
+        (function () {
+            function render(lines) {
+                var body = document.querySelector('#SubCheckBody');
+                var info = document.querySelector('#SubCheckInfo');
+                body.innerHTML = '';
+                var mode = '', date = '', warns = 0, oks = 0;
+
+                // Group: path -> list of findings, in report order.
+                var order = [];
+                var byPath = {};
+                for (var i = 0; i < lines.length; i++) {
+                    var cols = lines[i].split('\t');
+                    if (cols[0] === 'RUN') { mode = cols[1] || ''; date = cols[2] || ''; continue; }
+                    if (cols[0] !== 'SUBWARN' && cols[0] !== 'SUBOK' && cols[0] !== 'SUBINFO') continue;
+                    var p = cols[1] || '';
+                    if (!byPath[p]) { byPath[p] = []; order.push(p); }
+                    byPath[p].push({ kind: cols[0], msg: cols.slice(2).join(' ') });
+                }
+
+                order.forEach(function (p) {
+                    var findings = byPath[p];
+                    var hasWarn = findings.some(function (f) { return f.kind === 'SUBWARN'; });
+                    if (hasWarn) warns++; else if (findings.some(function (f) { return f.kind === 'SUBOK'; })) oks++;
+
+                    var tr = document.createElement('tr');
+                    var tdFile = document.createElement('td');
+                    tdFile.textContent = p;
+                    tdFile.style.wordBreak = 'break-all';
+                    if (hasWarn) { tdFile.style.color = '#c33'; }
+                    tr.appendChild(tdFile);
+
+                    var tdMsg = document.createElement('td');
+                    findings.forEach(function (f) {
+                        var div = document.createElement('div');
+                        div.style.wordBreak = 'break-all';
+                        div.textContent = (f.kind === 'SUBWARN' ? '⚠ ' : f.kind === 'SUBOK' ? '✓ ' : '· ') + f.msg;
+                        if (f.kind === 'SUBWARN') { div.style.color = '#c33'; }
+                        if (f.kind === 'SUBINFO') { div.style.opacity = '0.7'; }
+                        tdMsg.appendChild(div);
+                    });
+                    tr.appendChild(tdMsg);
+                    body.appendChild(tr);
+                });
+
+                info.textContent = 'Latest check: ' + date.replace('T', ' ').replace('Z', ' UTC')
+                    + ' — ' + warns + ' episode(s) with problems, ' + oks + ' fine.';
+                if (order.length === 0) {
+                    body.innerHTML = '<tr><td colspan="2">Nothing reported yet.</td></tr>';
+                }
+            }
+
+            document.querySelector('#EpisodeToolsSubCheckPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.ajax({
+                        type: 'GET',
+                        url: ApiClient.getUrl('EpisodeTools/SubCheck'),
+                        dataType: 'text'
+                    }).then(function (text) {
+                        render((text || '').split(/\r?\n/));
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function () {
+                        document.querySelector('#SubCheckBody').innerHTML =
+                            '<tr><td colspan="2">Could not load the sub check. Is plugin v1.5.0+ installed?</td></tr>';
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+        })();
+    </script>
+</div>
+</body>
+</html>

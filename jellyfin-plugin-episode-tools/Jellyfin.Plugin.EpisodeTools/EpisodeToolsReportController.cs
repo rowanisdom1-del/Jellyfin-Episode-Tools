@@ -57,6 +57,33 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the latest subtitle check report as plain text.
+    /// Lines are tab separated: RUN kind timestamp, SUBWARN path message, SUBOK path message,
+    /// SUBINFO path message.
+    /// </summary>
+    [HttpGet("SubCheck")]
+    public ActionResult<string> GetSubCheck()
+    {
+        var baseDir = Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools");
+        var path = Path.Combine(baseDir, "subcheck-report.txt");
+
+        try
+        {
+            if (!System.IO.File.Exists(path))
+            {
+                return Ok("No subtitle check yet. Run task '5. Check subtitles' first.");
+            }
+
+            return Ok(System.IO.File.ReadAllText(path, Encoding.UTF8));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Episode Tools] Could not read the subtitle check report.");
+            return StatusCode(500, "Could not read the subtitle check report: " + ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Returns every show found under the configured series/scan folders, with file counts and
     /// the subtitle language tags found in file names.
     /// </summary>

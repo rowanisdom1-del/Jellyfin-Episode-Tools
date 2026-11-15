@@ -44,20 +44,32 @@ internal static class ScriptRunner
 
     /// <summary>
     /// Runs the MKV to MP4 script over every configured scan folder. Without <paramref name="apply"/>
-    /// it only lists what would be converted.
+    /// it only lists what would be converted. With <paramref name="redo"/> it also re-converts files
+    /// whose .mp4 already exists, replacing it after verification.
     /// </summary>
-    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken)
+    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false)
     {
         var cfg = GetConfig();
         var args = new List<string>();
         if (apply)
         {
             args.Add("--apply");
+            if (redo)
+            {
+                args.Add("--redo");
+                logger.LogWarning("[Episode Tools] Re-convert run: existing .mp4 files will be REPLACED (only after the new file passes verification).");
+            }
+
             if (cfg.DeleteOriginalsAfterConvert)
             {
                 args.Add("--delete-originals");
                 logger.LogWarning("[Episode Tools] Settings say: delete each .mkv after its .mp4 has been checked.");
             }
+        }
+
+        if (cfg.DropSignsSongs)
+        {
+            args.Add("--drop-signs-songs");
         }
 
         if (cfg.ConvertUnusualAudioToAac)
@@ -137,6 +149,83 @@ internal static class ScriptRunner
         }
 
         return RunAsync(logger, "bash", "convert_mkv_to_mp4.sh", args, total, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the subtitle check script: reports subtitle tracks that look like signs/songs/lyrics,
+    /// lyrics-heavy content or broken timing. Changes nothing.
+    /// </summary>
+    public static Task RunSubCheckAsync(ILogger logger, IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        var cfg = GetConfig();
+        var args = new List<string>();
+
+        var reportPath = Path.Combine(
+            Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools"),
+            "subcheck-report.txt");
+        try
+        {
+            if (File.Exists(reportPath))
+            {
+                File.Delete(reportPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] Could not reset the subtitle check report file.");
+        }
+
+        args.Add("--report");
+        args.Add(reportPath);
+
+        var folders = new List<string>(cfg.EffectiveRenameFolders);
+        foreach (var dir in cfg.EffectiveConvertFolders)
+        {
+            if (!folders.Contains(dir, StringComparer.OrdinalIgnoreCase))
+            {
+                folders.Add(dir);
+            }
+        }
+
+        var total = 0;
+        foreach (var dir in folders)
+        {
+            args.Add(dir);
+            total += CountVideoFiles(dir);
+        }
+
+        return RunAsync(logger, "python3", "subcheck.py", args, total, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// Counts video files (all extensions the scripts handle) for progress reporting.
+    /// </summary>
+    private static int CountVideoFiles(string dir)
+    {
+        if (dir.Length == 0)
+        {
+            return 0;
+        }
+
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts"
+        };
+
+        try
+        {
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                MatchCasing = MatchCasing.CaseInsensitive
+            };
+            return Directory.EnumerateFiles(dir, "*", options).Count(f => extensions.Contains(Path.GetExtension(f)));
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
     }
 
     private static PluginConfiguration GetConfig()

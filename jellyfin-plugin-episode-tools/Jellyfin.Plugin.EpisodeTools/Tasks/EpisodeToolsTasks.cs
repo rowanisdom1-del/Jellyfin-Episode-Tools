@@ -145,7 +145,81 @@ public sealed class ConvertApplyTask : IScheduledTask
     /// <inheritdoc />
     public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
-        return ScriptRunner.RunConvertAsync(_logger, true, progress, cancellationToken);
+        return ScriptRunner.RunConvertAsync(_logger, true, progress, cancellationToken, redo: false);
+    }
+
+    /// <inheritdoc />
+    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
+    {
+        return Array.Empty<TaskTriggerInfo>();
+    }
+}
+
+/// <summary>Checks subtitle tracks for signs/songs/lyrics problems. Changes nothing.</summary>
+public sealed class SubCheckTask : IScheduledTask
+{
+    private readonly ILogger<SubCheckTask> _logger;
+
+    /// <summary>Initializes a new instance of the <see cref="SubCheckTask"/> class.</summary>
+    /// <param name="logger">Logger.</param>
+    public SubCheckTask(ILogger<SubCheckTask> logger)
+    {
+        _logger = logger;
+    }
+
+    /// <inheritdoc />
+    public string Name => "5. Check subtitles (reports problems, changes nothing)";
+
+    /// <inheritdoc />
+    public string Key => "EpisodeToolsSubCheck";
+
+    /// <inheritdoc />
+    public string Description => "Analyses the subtitle tracks of every episode: flags signs/songs/lyrics tracks, lyrics-heavy content and broken timing, and warns when the default track is the wrong one. Read the result under Dashboard > Plugins > Episode Tools > Episode Tools Sub Check.";
+
+    /// <inheritdoc />
+    public string Category => "Episode Tools";
+
+    /// <inheritdoc />
+    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        return ScriptRunner.RunSubCheckAsync(_logger, progress, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
+    {
+        return Array.Empty<TaskTriggerInfo>();
+    }
+}
+
+/// <summary>Re-converts MKV to MP4, replacing existing .mp4 files after verification.</summary>
+public sealed class ConvertRedoTask : IScheduledTask
+{
+    private readonly ILogger<ConvertRedoTask> _logger;
+
+    /// <summary>Initializes a new instance of the <see cref="ConvertRedoTask"/> class.</summary>
+    /// <param name="logger">Logger.</param>
+    public ConvertRedoTask(ILogger<ConvertRedoTask> logger)
+    {
+        _logger = logger;
+    }
+
+    /// <inheritdoc />
+    public string Name => "6. Re-convert MKV to MP4 (replaces existing .mp4)";
+
+    /// <inheritdoc />
+    public string Key => "EpisodeToolsConvertRedo";
+
+    /// <inheritdoc />
+    public string Description => "Same as task 4, but existing .mp4 files are replaced (only after the new file passes verification). Use this after changing track preferences or settings so already-converted episodes pick them up.";
+
+    /// <inheritdoc />
+    public string Category => "Episode Tools";
+
+    /// <inheritdoc />
+    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        return ScriptRunner.RunConvertAsync(_logger, true, progress, cancellationToken, redo: true);
     }
 
     /// <inheritdoc />
