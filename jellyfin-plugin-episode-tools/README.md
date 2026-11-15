@@ -99,6 +99,7 @@ sudo systemctl restart jellyfin
 
 ## Version history
 
+- **2.4.1** — Moonbase-style hero card on the Settings tab (status line, eyebrow, task chips).
 - **2.4.0** — one Moonbase-style settings page (sidebar tabs, search, iOS toggles) in the
   Plugins section of the Dashboard sidebar; fixes the Shows page (audio-fallback dropdown
   never rendered) and the unreachable Sub Check page.
