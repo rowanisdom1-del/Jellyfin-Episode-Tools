@@ -58,18 +58,130 @@ def strip_drawing_soup(text):
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
+def _norm_seg(s):
+    return re.sub(r"[\s.,!?;:'\"-]+", "", s).casefold()
+
+
+# Genuine words that end in "m" - their trailing m must never be stripped.
+KEEP_M = {
+    "am", "from", "him", "them", "team", "teams", "dream", "dreams",
+    "room", "rooms", "home", "homes", "name", "names", "time", "times",
+    "problem", "problems", "system", "systems", "bottom", "bottoms",
+    "autumn", "welcome", "welcomes", "confirm", "confirms", "perform",
+    "performs", "inform", "informs", "transform", "transforms", "platform",
+    "platforms", "album", "albums", "income", "assume", "assumes",
+    "consume", "consumes", "resume", "seem", "seems", "boom", "zoom",
+    "film", "films", "storm", "storms", "warm", "calm", "gram",
+    "program", "programs", "diagram", "paragraph", "symptom", "symptoms",
+    "kingdom", "random", "medium", "stadium", "museum", "vacuum",
+    "algorithm", "algorithms", "mom",
+}
+
+
+def strip_glued_m(text):
+    """Remove the drawing "m" (moveto) that earlier conversions glued onto
+    segment text: "coming homem Ichikam Ninom" -> "coming home Ichika Nino".
+    Tokens that are real m-ending words ("from", "team") are kept."""
+    out = []
+    for word in text.split(" "):
+        if not word:
+            continue
+        if re.fullmatch(r"[mM]+", word):
+            continue  # bare moveto leftovers ("library mmmmm...")
+        stripped = word
+        m = re.search(r"[mM]+$", stripped)
+        if m and m.start() > 0 and stripped[m.start() - 1].isalpha() \
+                and stripped.casefold() not in KEEP_M:
+            stripped = stripped[:m.start()]
+        if stripped:
+            out.append(stripped)
+    return " ".join(out)
+
+
+def _norm_period(s, i):
+    """At position i find identical copies glued together, ignoring spaces and
+    case ("TheQuint...upletsThe Quintessential..."). Returns
+    (first_copy_text, first_copy_end, consume_end) or None.
+
+    Space-separated repeats ("No no no", "Yes yes") always have a space at the
+    copy seam, so they fail the seam check and are left alone.
+    """
+    idx = []
+    buf = []
+    for p in range(i, len(s)):
+        if s[p] != " ":
+            idx.append(p)
+            buf.append(s[p].casefold())
+    norm = "".join(buf)
+    m = len(norm)
+    for L in range(4, m // 2 + 1):
+        if norm[:L] != norm[L:2 * L]:
+            continue
+        if not re.search(r"[a-z]", norm[:L]):
+            continue
+        seam = idx[L]
+        if seam - 1 < i or s[seam - 1] == " ":
+            continue  # copies are space-separated: normal dialogue, keep
+        k = 2
+        while norm[L * k:L * (k + 1)] == norm[:L]:
+            k += 1
+        first_end = idx[L]
+        consume_end = idx[L * k] if L * k < m else len(s)
+        return s[i:first_end], first_end, consume_end
+    return None
+
+
 def collapse_repeats(text):
-    """"XyXyXy" -> "Xy": fansub signs stack identical copies of the same line
-    (karaoke/overlay events) which earlier conversions flattened into one cue."""
-    n = len(text)
-    if n < 8:
-        return text
-    # smallest unit first, so "XyXyXy" collapses to "Xy" (not to "XyXy")
-    for unit_len in range(4, n // 2 + 1):
-        if n % unit_len == 0:
-            unit = text[:unit_len]
-            if text == unit * (n // unit_len):
-                return unit
+    """De-stack identical glued copies that earlier conversions flattened into one
+    cue ("ItsukiItsukiItsukiItsukiRaiha...").
+
+    Copies are glued boundary-to-boundary, so they are exactly periodic at the
+    cursor; space-separated word repeats ("No no no no") never form a glued
+    period at a word start and survive untouched.
+    """
+    def once(s):
+        out = []
+        i = 0
+        n = len(s)
+        trusted = True
+        while i < n:
+            # Only test for a period at a real boundary: the start, right after
+            # a consumed copy (trusted), or a word start. Mid-word positions
+            # produce false periods ("o no n" inside "No no no").
+            hit = None
+            if trusted or i == 0 or s[i - 1] == " ":
+                hit = _norm_period(s, i)
+            if hit is not None:
+                unit, _first_end, consume_end = hit
+                unit_len = len(unit)
+                out.append(unit)
+                i = consume_end
+                # near-identical leftover copy ("School camp!" after "School Camp")
+                while i < n:
+                    skip = 0
+                    for extra in (0, 1, 2, -1, -2):
+                        L2 = unit_len + extra
+                        if L2 > 0 and i + L2 <= n and _norm_seg(s[i:i + L2]) == _norm_seg(unit):
+                            skip = L2
+                            break
+                    if skip:
+                        i += skip
+                    else:
+                        break
+                trusted = True
+            else:
+                out.append(s[i])
+                i += 1
+                trusted = False
+        return "".join(out)
+
+    # stacked doubled pairs ("NextNextStopStop") need a second pass to expose
+    # the larger structure ("NextStopNextStop" -> "NextStop")
+    for _ in range(8):
+        new = once(text)
+        if new == text:
+            break
+        text = new
     return text
 
 
@@ -117,6 +229,7 @@ def clean_text(text):
     # glued to real dialogue ("...378.4Lantern Shop"), some pure soup.
     text = strip_drawing_soup(text)
     text = collapse_repeats(text)
+    text = strip_glued_m(text)
     if text and re.fullmatch(r"[\s\d.,:mlbncpMLBNCP-]+", text) and re.search(r"\d", text):
         return ""
     return text
