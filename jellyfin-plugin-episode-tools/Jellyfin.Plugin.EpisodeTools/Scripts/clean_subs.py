@@ -73,7 +73,13 @@ def clean_text(text):
             kept.append(part)
     text = "".join(kept)
     text = text.replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
-    return re.sub(r"[ \t]+", " ", text).strip()
+    text = re.sub(r"[ \t]+", " ", text).strip()
+    # Drawing paths that were already flattened to literal text by an earlier
+    # (bad) conversion: "m 1 -5 l 4 -62 l 6 -5 ..." - coordinate soup that
+    # strobes as random numbers and overflows mov_text (ERANGE).
+    if text and re.fullmatch(r"[\s\d.,:mlbncpMLBNCP-]+", text) and re.search(r"\d", text):
+        return ""
+    return text
 
 
 def load_cues(ass_path):
