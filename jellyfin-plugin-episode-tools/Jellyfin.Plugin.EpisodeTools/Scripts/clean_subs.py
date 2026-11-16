@@ -33,6 +33,45 @@ MICRO_CUE_S = 0.25      # a cue shorter than this may be a fragment of a bigger 
 MERGE_GAP_S = 0.12      # fragments may be this far apart and still belong together
 MIN_DURATION_S = 0.3    # merged/short cues get at least this long to stay readable
 
+# Flattened drawing paths from earlier (bad) conversions: "m 0 0 b 9 0 19.5 ..."
+DRAW_CMD_RE = re.compile(r"(?<![A-Za-z0-9])[mlbncsMLBNCS](?:\s+-?\d+(?:\.\d+)?){2,}")
+NUM_RUN_RE = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?(?:\s+-?\d+(?:\.\d+)?)+")
+
+
+def strip_drawing_soup(text):
+    """Remove coordinate soup glued to real text: "m 0 0 b 9 0 ...19.5Currently...".
+    Iterates because removing one layer exposes the next (e.g. "289.4 0m 306.1")."""
+    prev = None
+    stripped = False
+    while text and prev != text:
+        prev = text
+        new = DRAW_CMD_RE.sub(" ", text)
+        new = NUM_RUN_RE.sub(" ", new)
+        if new != text:
+            stripped = True
+        text = new
+        # Orphaned command letters left once their numbers are gone ("0m 306.1"
+        # -> NUM_RUN eats "0" -> bare "m"). Only after a real strip, so genuine
+        # units like "5 m" and contractions ("Let's") stay untouched.
+        if stripped:
+            text = re.sub(r"(^|\s)([mlbncsMLBNCS])(?=\s|$)", r"\1 ", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def collapse_repeats(text):
+    """"XyXyXy" -> "Xy": fansub signs stack identical copies of the same line
+    (karaoke/overlay events) which earlier conversions flattened into one cue."""
+    n = len(text)
+    if n < 8:
+        return text
+    # smallest unit first, so "XyXyXy" collapses to "Xy" (not to "XyXy")
+    for unit_len in range(4, n // 2 + 1):
+        if n % unit_len == 0:
+            unit = text[:unit_len]
+            if text == unit * (n // unit_len):
+                return unit
+    return text
+
 
 def parse_ass_time(value):
     """0:01:50.10 -> 110.1"""
@@ -74,9 +113,10 @@ def clean_text(text):
     text = "".join(kept)
     text = text.replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
     text = re.sub(r"[ \t]+", " ", text).strip()
-    # Drawing paths that were already flattened to literal text by an earlier
-    # (bad) conversion: "m 1 -5 l 4 -62 l 6 -5 ..." - coordinate soup that
-    # strobes as random numbers and overflows mov_text (ERANGE).
+    # Drawing paths flattened to literal text by an earlier conversion - some
+    # glued to real dialogue ("...378.4Lantern Shop"), some pure soup.
+    text = strip_drawing_soup(text)
+    text = collapse_repeats(text)
     if text and re.fullmatch(r"[\s\d.,:mlbncpMLBNCP-]+", text) and re.search(r"\d", text):
         return ""
     return text
@@ -111,6 +151,17 @@ def merge_micro_cues(cues):
             same_start = abs(start - prev[0]) < 0.005
             prev_is_fragment = (prev[1] - prev[0]) < MICRO_CUE_S
             if same_start or (prev_is_fragment and start <= prev[1] + MERGE_GAP_S):
+                # Identical overlay/karaoke copies of the same line: extend the
+                # cue, never concatenate ("The Costume House" x10 on screen).
+                if text == prev[2] or (
+                        len(text) >= 4 and len(prev[2]) >= 4 and text in prev[2]):
+                    prev[1] = max(prev[1], end)
+                    continue
+                if len(prev[2]) >= 4 and len(text) >= 4 and prev[2] in text:
+                    # growing karaoke line ("The Costume" -> "The Costume House")
+                    prev[2] = text
+                    prev[1] = max(prev[1], end)
+                    continue
                 prev[1] = max(prev[1], end)
                 prev[2] += text
                 continue
@@ -119,6 +170,7 @@ def merge_micro_cues(cues):
     # Zero/very short durations (letter runs that all share one timestamp) would be
     # invisible or strobe on screen; give them a readable minimum length.
     for cue in merged:
+        cue[2] = collapse_repeats(cue[2])
         if cue[1] - cue[0] < MIN_DURATION_S:
             cue[1] = cue[0] + MIN_DURATION_S
     return merged
