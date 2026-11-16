@@ -75,6 +75,7 @@ KEEP_M = {
     "program", "programs", "diagram", "paragraph", "symptom", "symptoms",
     "kingdom", "random", "medium", "stadium", "museum", "vacuum",
     "algorithm", "algorithms", "mom",
+    "pm", "km", "cm", "ml",
 }
 
 
@@ -87,7 +88,11 @@ def strip_glued_m(text):
         if not word:
             continue
         if re.fullmatch(r"[mM]+", word):
-            continue  # bare moveto leftovers ("library mmmmm...")
+            # a lone "m" right after a number is a unit ("5 m from platform");
+            # runs of m's are always drawing leftovers ("library mmmmm...")
+            if len(word) == 1 and out and re.search(r"\d$", out[-1]):
+                out.append(word)
+            continue  # bare moveto leftovers
         stripped = word
         m = re.search(r"[mM]+$", stripped)
         if m and m.start() > 0 and stripped[m.start() - 1].isalpha() \
@@ -98,13 +103,13 @@ def strip_glued_m(text):
     return " ".join(out)
 
 
-def _norm_period(s, i):
+def _norm_period(s, i, trusted=False):
     """At position i find identical copies glued together, ignoring spaces and
     case ("TheQuint...upletsThe Quintessential..."). Returns
     (first_copy_text, first_copy_end, consume_end) or None.
 
-    Space-separated repeats ("No no no", "Yes yes") always have a space at the
-    copy seam, so they fail the seam check and are left alone.
+    Space-separated short repeats ("No no no", "Yes yes") fail the seam check
+    and are left alone; long spaced copies (stacked menu signs) are accepted.
     """
     idx = []
     buf = []
@@ -114,20 +119,48 @@ def _norm_period(s, i):
             buf.append(s[p].casefold())
     norm = "".join(buf)
     m = len(norm)
-    for L in range(4, m // 2 + 1):
+    for L in range(3, m // 2 + 1):
         if norm[:L] != norm[L:2 * L]:
             continue
-        if not re.search(r"[a-z]", norm[:L]):
+        if not re.search(r"[a-z0-9]", norm[:L]):
             continue
         seam = idx[L]
-        if seam - 1 < i or s[seam - 1] == " ":
-            continue  # copies are space-separated: normal dialogue, keep
+        spaced = seam - 1 >= i and s[seam - 1] == " "
+        if spaced and L < 12:
+            continue  # short space-separated repeats: normal dialogue, keep
+        # a seam glued to a single letter on either side is a mid-word false
+        # period ("nonon" inside "No no no no no")
+        b = seam - 1
+        while b >= i and s[b].isalnum():
+            b -= 1
+        if seam - 1 - b == 1:
+            continue
+        a = seam
+        while a < len(s) and s[a].isalnum():
+            a += 1
+        if a - seam == 1:
+            continue
         k = 2
         while norm[L * k:L * (k + 1)] == norm[:L]:
             k += 1
         first_end = idx[L]
-        consume_end = idx[L * k] if L * k < m else len(s)
-        return s[i:first_end], first_end, consume_end
+        unit = s[i:first_end]
+        # a space-containing unit starting mid-run is a shifted tiling of a
+        # longer word ("ush, crush" inside "crush, crush") — not a copy start.
+        # Skip the check right after a consumed copy or at the string start:
+        # there the cursor is already at a known copy boundary.
+        if " " in unit and i > 0 and not trusted and s[i - 1].isalnum():
+            continue
+        # a unit that is itself stacked ("crush, crush, ") is not atomic: keep
+        # looking from a later position instead of eating it here
+        unit_norm = "".join(ch.casefold() for ch in unit if ch != " ")
+        for Lp in range(3, len(unit_norm) // 2 + 1):
+            if unit_norm[:Lp] == unit_norm[Lp:2 * Lp] and re.search(r"[a-z0-9]", unit_norm[:Lp]):
+                break
+        else:
+            consume_end = idx[L * k] if L * k < m else len(s)
+            return s[i:first_end], first_end, consume_end
+        continue
     return None
 
 
@@ -145,17 +178,13 @@ def collapse_repeats(text):
         n = len(s)
         trusted = True
         while i < n:
-            # Only test for a period at a real boundary: the start, right after
-            # a consumed copy (trusted), or a word start. Mid-word positions
-            # produce false periods ("o no n" inside "No no no").
-            hit = None
-            if trusted or i == 0 or s[i - 1] == " ":
-                hit = _norm_period(s, i)
+            hit = _norm_period(s, i, trusted)
             if hit is not None:
                 unit, _first_end, consume_end = hit
                 unit_len = len(unit)
                 out.append(unit)
                 i = consume_end
+                trusted = True
                 # near-identical leftover copy ("School camp!" after "School Camp")
                 while i < n:
                     skip = 0
@@ -168,7 +197,6 @@ def collapse_repeats(text):
                         i += skip
                     else:
                         break
-                trusted = True
             else:
                 out.append(s[i])
                 i += 1
