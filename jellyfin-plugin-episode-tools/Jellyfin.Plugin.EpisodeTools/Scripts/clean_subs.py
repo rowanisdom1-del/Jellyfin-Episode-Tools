@@ -145,12 +145,20 @@ def _norm_period(s, i, trusted=False):
             k += 1
         first_end = idx[L]
         unit = s[i:first_end]
-        # a space-containing unit starting mid-run is a shifted tiling of a
-        # longer word ("ush, crush" inside "crush, crush") — not a copy start.
-        # Skip the check right after a consumed copy or at the string start:
-        # there the cursor is already at a known copy boundary.
+        # a space-containing unit starting mid-run can be a shifted tiling of
+        # a longer word ("ush, crush" inside "crush, crush") — but only when the
+        # fragment before the cursor repeats before the next copy. A plain
+        # glued word ("TotalNakano NinoNakano Nino") is a real stack.
         if " " in unit and i > 0 and not trusted and s[i - 1].isalnum():
-            continue
+            b1 = i
+            while b1 > 0 and s[b1 - 1].isalnum():
+                b1 -= 1
+            c2 = idx[L]
+            b2 = c2
+            while b2 > 0 and s[b2 - 1].isalnum():
+                b2 -= 1
+            if b1 < i and s[b1:i] == s[b2:c2]:
+                continue
         # a unit that is itself stacked ("crush, crush, ") is not atomic: keep
         # looking from a later position instead of eating it here
         unit_norm = "".join(ch.casefold() for ch in unit if ch != " ")
