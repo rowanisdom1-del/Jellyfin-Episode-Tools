@@ -216,7 +216,7 @@ internal static class IntrosRunner
         return (cached?.Results ?? Array.Empty<IntroResult>(), cached?.State);
     }
 
-    private sealed class IntrosState
+    internal sealed class IntrosState
     {
         public int Version { get; set; } = 1;
 
