@@ -149,7 +149,7 @@ internal static class IntrosRunner
     private static string ResultsPath =>
         Path.Combine(Plugin.Instance?.WorkFolder ?? ".", "intros.json");
 
-    private static (long Length, DateTime Modified, IReadOnlyList<IntroResult> Results)? _resultsCache;
+    private static (long Length, DateTime Modified, IReadOnlyList<IntroResult> Results, IntrosState? State)? _resultsCache;
 
     /// <summary>True when the results file holds an intro for exactly this path.</summary>
     public static bool HasIntro(string path)
@@ -196,13 +196,24 @@ internal static class IntrosRunner
                     PropertyNameCaseInsensitive = true
                 });
             IReadOnlyList<IntroResult> results = state?.Intros ?? new List<IntroResult>();
-            _resultsCache = (key.Length, key.Modified, results);
+            _resultsCache = (key.Length, key.Modified, results, state);
             return results;
         }
         catch (Exception)
         {
             return Array.Empty<IntroResult>();
         }
+    }
+
+    /// <summary>
+    /// Same as LoadResults but also returns the raw state (scan settings of the previous
+    /// run), used by the scanner to detect settings changes.
+    /// </summary>
+    internal static (IReadOnlyList<IntroResult> Results, IntrosState? State) LoadState()
+    {
+        LoadResults();
+        var cached = _resultsCache;
+        return (cached?.Results ?? Array.Empty<IntroResult>(), cached?.State);
     }
 
     private sealed class IntrosState
@@ -212,6 +223,10 @@ internal static class IntrosRunner
         public DateTime ScannedAt { get; set; }
 
         public int WindowSeconds { get; set; }
+
+        public int MinDuration { get; set; }
+
+        public int MaxDuration { get; set; }
 
         public List<IntroResult> Intros { get; set; } = new();
     }
@@ -288,19 +303,61 @@ internal static class IntrosRunner
             jobs.Count,
             seasons.Count);
 
-        var totalMissing = jobs.Count(j => j.Points is null);
+        // Manual overrides: episodes with a matching override never get fingerprinted, and
+        // their intro window is stamped straight into the results. This both saves all the
+        // fingerprint/pairing work for shows where detection is unnecessary or unreliable and
+        // protects the configured window from being clobbered by a rescan.
+        var overrideMap = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
+        foreach (var job in jobs)
+        {
+            var ov = cfg.FindIntroOverride(job.Show, job.Season, job.Path);
+            if (ov is not null)
+            {
+                overrideMap[job.Path] = new IntroResult
+                {
+                    File = job.Path,
+                    Show = job.Show,
+                    Season = job.Season,
+                    Start = Math.Round(ov.Start, 2),
+                    End = Math.Round(ov.End, 2)
+                };
+            }
+        }
+
+        if (overrideMap.Count > 0)
+        {
+            logger.LogInformation(
+                "[Episode Tools] Intro scan: {Count} episode(s) matched a manual intro override and skip detection.",
+                overrideMap.Count);
+        }
+
+        var totalMissing = jobs.Count(j => j.Points is null && !overrideMap.ContainsKey(j.Path));
         var done = 0;
         var found = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
+
+        // Detect scanner settings changes: min/max duration influence the pairing result, so a
+        // change forces re-pairing even when every fingerprint came from the cache.
+        var (prevResults, prevState) = LoadState();
+        var settingsChanged = prevState is null ||
+                              prevState.WindowSeconds != window ||
+                              prevState.MinDuration != minDuration ||
+                              prevState.MaxDuration != maxDuration;
 
         // Seed with the previous run's results so an interrupted scan never wipes intros for
         // seasons it has not reached yet; entries for files that disappeared drop out here.
         var jobPaths = new HashSet<string>(jobs.Select(j => j.Path), StringComparer.OrdinalIgnoreCase);
-        foreach (var prev in LoadResults())
+        foreach (var prev in prevResults)
         {
             if (jobPaths.Contains(prev.File))
             {
                 found[prev.File] = prev;
             }
+        }
+
+        // Overrides take precedence over anything a previous scan found.
+        foreach (var kvp in overrideMap)
+        {
+            found[kvp.Key] = kvp.Value;
         }
 
         var jsonOpts = new System.Text.Json.JsonSerializerOptions
@@ -320,6 +377,8 @@ internal static class IntrosRunner
             {
                 ScannedAt = DateTime.UtcNow,
                 WindowSeconds = window,
+                MinDuration = minDuration,
+                MaxDuration = maxDuration,
                 Intros = results
             };
 
@@ -343,8 +402,8 @@ internal static class IntrosRunner
                 _lastProgress = 100.0 * seasonIndex / seasons.Count;
             }
 
-            var queue = season.Where(j => j.Points is { Length: > 0 }).ToList();
-            var missing = season.Where(j => j.Points is null).ToList();
+            var queue = season.Where(j => j.Points is { Length: > 0 } && !overrideMap.ContainsKey(j.Path)).ToList();
+            var missing = season.Where(j => j.Points is null && !overrideMap.ContainsKey(j.Path)).ToList();
 
             if (missing.Count > 0)
             {
@@ -371,9 +430,30 @@ internal static class IntrosRunner
                     }).ConfigureAwait(false);
             }
 
-            queue = season.Where(j => j.Points is { Length: > 0 }).ToList();
+            queue = season.Where(j => j.Points is { Length: > 0 } && !overrideMap.ContainsKey(j.Path)).ToList();
             if (queue.Count < 2)
             {
+                // Overridden episodes of this season keep their configured intro even when
+                // fewer than two episodes are left for pairing.
+                foreach (var j in season)
+                {
+                    if (overrideMap.TryGetValue(j.Path, out var ov))
+                    {
+                        found[j.Path] = ov;
+                    }
+                }
+
+                continue;
+            }
+
+            if (missing.Count == 0 && !settingsChanged)
+            {
+                // Every fingerprint came from the cache and the scanner settings did not
+                // change: pairing would reproduce the exact same results (it is a pure
+                // function of the fingerprints), so keep the seeded values and skip both the
+                // O(n^2) comparison and the ffmpeg silence snap pass.
+                _lastMessage = $"season {seasonIndex}/{seasons.Count}: all cached, kept {queue.Count} intro(s)";
+                WriteState();
                 continue;
             }
 
@@ -383,6 +463,15 @@ internal static class IntrosRunner
             foreach (var stale in found.Keys.Where(k => seasonPaths.Contains(k)).ToList())
             {
                 found.Remove(stale);
+            }
+
+            // Re-stamp overrides for this season: the wipe above must not drop them.
+            foreach (var j in season)
+            {
+                if (overrideMap.TryGetValue(j.Path, out var ov))
+                {
+                    found[j.Path] = ov;
+                }
             }
 
             _lastMessage = $"season {seasonIndex}/{seasons.Count}: comparing {queue.Count} episode(s)";

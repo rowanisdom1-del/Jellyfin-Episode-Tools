@@ -794,6 +794,7 @@ fi
 
   maps=("${VIDEO_MAPS[@]}" "${AUDIO_MAPS[@]}")
   extra_input=1
+  sout=0
   for i in "${SUB_INDICES[@]}"; do
     cleaned="${CLEAN_MAP[$i]:-}"
     if [[ -n "$cleaned" ]]; then
@@ -803,6 +804,11 @@ fi
     else
       maps+=(-map "0:${i}")
     fi
+    slang="${SLANGS[$sout]:-}"
+    if [[ -n "$slang" && "$slang" != "und" ]]; then
+      maps+=(-metadata:s:s:$sout "language=$slang")
+    fi
+    sout=$((sout + 1))
   done
   CURRENT_TMP=$tmp
 

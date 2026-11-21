@@ -703,6 +703,12 @@
                                     <input id="IntroMaxDuration" name="IntroMaxDuration" type="number" min="1" max="900" step="1" is="emby-input" />
                                     <div class="fieldDescription">Audio ranges longer than this are ignored (default 120). Raises it for shows with very long openings.</div>
                                 </div>
+                                <div id="IntroOverrideCard">
+                                    <h3 class="sectionTitle">Manual intro overrides</h3>
+                                    <div class="epInfoLine">Fixed intro windows for shows where the automatic detection drifts (variable cold opens). Show is required; season (S01) and episode (a file name fragment like S01E06) narrow the match; start and end are seconds. Matched episodes skip detection entirely, so rescans never clobber these values. One show/season row applies the same window to every episode.</div>
+                                    <div id="IntroOverrideRows"></div>
+                                    <button type="button" class="raised button-mini" id="IntroOverrideAdd">Add override</button>
+                                </div>
                             </div>
                         </section>
 
@@ -949,6 +955,53 @@
             });
 
             /* ---------- settings (load + save) ---------- */
+            var OVF = [
+                ['show', 'Show *', 'text'],
+                ['season', 'Season (S01)', 'text'],
+                ['episode', 'Episode fragment', 'text'],
+                ['start', 'Start (s) *', 'number'],
+                ['end', 'End (s) *', 'number']
+            ];
+
+            function ovAddRow(ov) {
+                var rows = document.querySelector('#IntroOverrideRows');
+                var row = document.createElement('div');
+                row.className = 'epOvRow';
+                row.style.cssText = 'display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin:0.5em 0;';
+                OVF.forEach(function (f) {
+                    var wrap = document.createElement('div');
+                    wrap.style.cssText = 'display:flex;flex-direction:column;min-width:' + (f[0] === 'episode' ? '190px' : '110px') + ';';
+                    var lab = document.createElement('label');
+                    lab.className = 'inputLabel inputLabelUnfocused';
+                    lab.textContent = f[1];
+                    var inp = document.createElement('input');
+                    inp.className = 'emby-input';
+                    inp.type = f[2];
+                    inp.setAttribute('data-ovf', f[0]);
+                    inp.style.width = '100%';
+                    if (f[2] === 'number') { inp.step = '0.5'; inp.min = '0'; }
+                    if (ov && ov[f[0]] !== undefined && ov[f[0]] !== null) { inp.value = ov[f[0]]; }
+                    wrap.appendChild(lab);
+                    wrap.appendChild(inp);
+                    row.appendChild(wrap);
+                });
+                var del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'raised button-mini';
+                del.textContent = 'Remove';
+                del.addEventListener('click', function () { row.parentNode.removeChild(row); });
+                row.appendChild(del);
+                rows.appendChild(row);
+            }
+
+            function loadOvRows(config) {
+                var rows = document.querySelector('#IntroOverrideRows');
+                rows.innerHTML = '';
+                (config.IntroOverrides || []).forEach(function (ov) { ovAddRow(ov); });
+            }
+
+            document.querySelector('#IntroOverrideAdd').addEventListener('click', function () { ovAddRow(null); });
+
             function loadSettings() {
                 Dashboard.showLoadingMsg();
                 ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
@@ -971,6 +1024,7 @@
                     document.querySelector('#IntroParallelism').value = (config.IntroParallelism !== undefined && config.IntroParallelism !== null) ? config.IntroParallelism : 2;
                     document.querySelector('#IntroMinDuration').value = (config.IntroMinDuration !== undefined && config.IntroMinDuration !== null) ? config.IntroMinDuration : 15;
                     document.querySelector('#IntroMaxDuration').value = (config.IntroMaxDuration !== undefined && config.IntroMaxDuration !== null) ? config.IntroMaxDuration : 120;
+                    loadOvRows(config);
                     Dashboard.hideLoadingMsg();
                 });
             }
@@ -1011,6 +1065,25 @@
                         config.IntroMinDuration = isNaN(introMin) ? 15 : introMin;
                         var introMax = parseInt(document.querySelector('#IntroMaxDuration').value, 10);
                         config.IntroMaxDuration = isNaN(introMax) ? 120 : introMax;
+                        var overrides = [];
+                        document.querySelectorAll('#IntroOverrideRows .epOvRow').forEach(function (row) {
+                            var get = function (name) {
+                                var el = row.querySelector('[data-ovf="' + name + '"]');
+                                return el ? el.value.trim() : '';
+                            };
+                            var start = parseFloat(get('start'));
+                            var end = parseFloat(get('end'));
+                            var show = get('show');
+                            if (!show || isNaN(start) || isNaN(end) || end <= start) { return; }
+                            overrides.push({
+                                Show: show,
+                                Season: get('season'),
+                                Episode: get('episode'),
+                                Start: start,
+                                End: end
+                            });
+                        });
+                        config.IntroOverrides = overrides;
                         ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
                         });

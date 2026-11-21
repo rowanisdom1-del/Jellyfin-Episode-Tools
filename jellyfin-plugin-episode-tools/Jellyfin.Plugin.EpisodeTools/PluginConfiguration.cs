@@ -81,6 +81,60 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<ShowPreference> ShowPreferences { get; set; } = new List<ShowPreference>();
 
     /// <summary>
+    /// Manual intro overrides, edited on the settings page. When an override matches a show
+    /// (and optionally a season and/or an episode name fragment), the intro scanner skips
+    /// detection for those episodes and stamps the configured start/end seconds onto every
+    /// one of them instead. Use it for shows whose variable cold opens confuse the pairwise
+    /// matching.
+    /// </summary>
+    [XmlElement("IntroOverride")]
+    public List<IntroOverride> IntroOverrides { get; set; } = new List<IntroOverride>();
+
+    /// <summary>
+    /// Returns the first override that matches this episode, or null. Season and Episode are
+    /// optional filters; an empty value matches everything. Episode matches when the file
+    /// path contains the given fragment (case-insensitive), so "S01E06" or a full file name
+    /// both work.
+    /// </summary>
+    public IntroOverride? FindIntroOverride(string show, string season, string path)
+    {
+        if (IntroOverrides is null)
+        {
+            return null;
+        }
+
+        foreach (var ov in IntroOverrides)
+        {
+            if (ov is null || ov.Start < 0 || ov.End <= ov.Start)
+            {
+                continue;
+            }
+
+            var ovShow = (ov.Show ?? string.Empty).Trim();
+            if (ovShow.Length == 0 || !string.Equals(ovShow, show ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var ovSeason = (ov.Season ?? string.Empty).Trim();
+            if (ovSeason.Length > 0 && !string.Equals(ovSeason, season ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var ovEpisode = (ov.Episode ?? string.Empty).Trim();
+            if (ovEpisode.Length > 0 && (path ?? string.Empty).IndexOf(ovEpisode, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            return ov;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Gets or sets the folder that is searched (including sub folders) for .mkv files.
     /// Kept for compatibility with configurations from version 1.0/1.1; it is only used
     /// when the ConvertFolders list below is empty.

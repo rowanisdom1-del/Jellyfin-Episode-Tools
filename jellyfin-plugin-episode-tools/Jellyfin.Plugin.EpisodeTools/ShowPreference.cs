@@ -42,3 +42,49 @@ public class ShowPreference
     /// </summary>
     public string AudioFallback { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// Manual intro timing override. Applied by the intro scanner to every matching episode;
+/// matched episodes skip fingerprinting and pairing entirely.
+/// </summary>
+public class IntroOverride
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IntroOverride"/> class.
+    /// </summary>
+    public IntroOverride()
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="IntroOverride"/> class.
+    /// </summary>
+    /// <param name="show">Show folder name (required).</param>
+    /// <param name="season">Season key like S01; empty matches every season.</param>
+    /// <param name="episode">File path fragment like S01E06; empty matches every episode.</param>
+    /// <param name="start">Intro start in seconds.</param>
+    /// <param name="end">Intro end in seconds.</param>
+    public IntroOverride(string show, string season, string episode, double start, double end)
+    {
+        Show = show;
+        Season = season;
+        Episode = episode;
+        Start = start;
+        End = end;
+    }
+
+    /// <summary>Gets or sets the show folder name (required).</summary>
+    public string Show { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the optional season filter (S01 style; empty = every season).</summary>
+    public string Season { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the optional episode filter (file path fragment; empty = every episode).</summary>
+    public string Episode { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the intro start in seconds.</summary>
+    public double Start { get; set; }
+
+    /// <summary>Gets or sets the intro end in seconds.</summary>
+    public double End { get; set; }
+}
