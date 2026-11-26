@@ -843,7 +843,7 @@ internal static class IntrosRunner
     // A recap or cold-open cluster chains into the cluster that follows it when, on some
     // shared file, the first stretch ends within this gap of the second stretch's start.
     // The earlier cluster is then pre-roll in front of the real segment.
-    private const double ConsensusToleranceSeconds = 5;
+    private const double ChainedGapSeconds = 3;
 
     /// <summary>Consensus bounds for one episode, plus its match confidence.</summary>
     private sealed class ConsensusBound
