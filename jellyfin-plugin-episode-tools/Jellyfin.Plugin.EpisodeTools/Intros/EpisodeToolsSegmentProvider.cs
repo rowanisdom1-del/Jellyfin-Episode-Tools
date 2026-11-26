@@ -5,11 +5,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Enums;
+using MediaBrowser.Controller.Chapters;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaSegments;
 using MediaBrowser.Model;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.MediaSegments;
 using Microsoft.Extensions.Logging;
 
@@ -23,14 +25,19 @@ namespace Jellyfin.Plugin.EpisodeTools.Intros;
 public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
 {
     private readonly ILibraryManager _libraryManager;
+    private readonly IChapterManager _chapterManager;
     private readonly ILogger<EpisodeToolsSegmentProvider> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="EpisodeToolsSegmentProvider"/> class.
     /// </summary>
-    public EpisodeToolsSegmentProvider(ILibraryManager libraryManager, ILogger<EpisodeToolsSegmentProvider> logger)
+    public EpisodeToolsSegmentProvider(
+        ILibraryManager libraryManager,
+        IChapterManager chapterManager,
+        ILogger<EpisodeToolsSegmentProvider> logger)
     {
         _libraryManager = libraryManager;
+        _chapterManager = chapterManager;
         _logger = logger;
     }
 
@@ -45,7 +52,28 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
             return ValueTask.FromResult(false);
         }
 
-        return ValueTask.FromResult(IntrosRunner.HasAnySegment(episode.Path));
+        // Scanner results, or chapters Jellyfin has already stored for the episode (the
+        // provider can classify those itself — see GetMediaSegments).
+        if (IntrosRunner.HasAnySegment(episode.Path))
+        {
+            return ValueTask.FromResult(true);
+        }
+
+        return ValueTask.FromResult(HasUsableChapters(episode));
+    }
+
+    /// <summary>True when Jellyfin's database already holds two or more chapters for the item.</summary>
+    private bool HasUsableChapters(BaseItem item)
+    {
+        try
+        {
+            return _chapterManager.GetChapters(item.Id).Count >= 2;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Episode Tools] chapter lookup failed for {Path}.", item.Path);
+            return false;
+        }
     }
 
     /// <inheritdoc />
@@ -67,7 +95,14 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
                 string.Equals(i.File, path, StringComparison.OrdinalIgnoreCase));
             if (intro is null)
             {
-                return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
+                // Fallback: Jellyfin may already have probed chapters for this episode
+                // during its own metadata refresh. Classify them here so a well-tagged file
+                // gets skip buttons even before an "8. Scan intros" run covers it.
+                intro = TryChapterFallback(item!);
+                if (intro is null)
+                {
+                    return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
+                }
             }
 
             // Skip when an identical segment from an earlier run is already stored.
@@ -156,6 +191,67 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
         }
 
         return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
+    }
+
+    /// <summary>
+    /// Classifies Jellyfin's stored chapters for an item into intro/outro windows. Returns
+    /// null when there is nothing usable. Outros are only classified while DetectOutros is
+    /// on, mirroring the scanner.
+    /// </summary>
+    private IntroResult? TryChapterFallback(BaseItem item)
+    {
+        try
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg is null)
+            {
+                return null;
+            }
+
+            var stored = _chapterManager.GetChapters(item.Id);
+            if (stored.Count < 2)
+            {
+                return null;
+            }
+
+            var duration = (item.RunTimeTicks ?? 0) / (double)TimeSpan.TicksPerSecond;
+            var min = Math.Clamp(cfg.IntroMinDuration, 5, 300);
+            var max = Math.Clamp(cfg.IntroMaxDuration, min, 600);
+
+            var chapters = new List<(string? Name, double Start)>(stored.Count);
+            foreach (var chapter in stored)
+            {
+                chapters.Add((chapter.Name, ChapterClassifier.TicksToSeconds(chapter.StartPositionTicks)));
+            }
+
+            var (winIntro, winOutro) = ChapterClassifier.ClassifyStoredChapters(
+                chapters, duration, min, max, cfg.DetectOutros);
+            if (winIntro is null && winOutro is null)
+            {
+                return null;
+            }
+
+            _logger.LogInformation(
+                "[Episode Tools] Serving {Count} segment(s) for {Path} from embedded chapters (no scan result yet).",
+                (winIntro is not null ? 1 : 0) + (winOutro is not null ? 1 : 0),
+                item.Path);
+
+            return new IntroResult
+            {
+                File = item.Path ?? string.Empty,
+                Show = string.Empty,
+                Season = string.Empty,
+                Start = winIntro?.Start ?? 0,
+                End = winIntro?.End ?? 0,
+                OutroStart = winOutro?.Start,
+                OutroEnd = winOutro?.End
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[Episode Tools] chapter fallback classification failed for {Path}.", item.Path);
+            return null;
+        }
     }
 
     /// <inheritdoc />

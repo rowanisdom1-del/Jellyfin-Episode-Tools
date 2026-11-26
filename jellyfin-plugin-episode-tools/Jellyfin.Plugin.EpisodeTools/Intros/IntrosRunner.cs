@@ -439,7 +439,52 @@ internal static class IntrosRunner
                 overrideMap.Count);
         }
 
-        var totalMissing = jobs.Count(j => j.Points is null && !overrideMap.ContainsKey(j.Path));
+        // Chapter fast-path (priority: override > chapter > fingerprint): episodes whose
+        // container carries a well-tagged OP/ED chapter get their intro (and outro, when
+        // enabled) straight from the chapters — frame exact, no chromaprint decode, no
+        // statistical matching and no silence snapping (which could only move an exact
+        // boundary). Chapter boundaries come from the metadata probe's cache.
+        var chapterIntro = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
+        var chapterOutro = new Dictionary<string, (double Start, double End, string Label)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var job in jobs)
+        {
+            if (overrideMap.ContainsKey(job.Path) || !meta.TryGetValue(job.Path, out var m) || m.Chapters.Count < 2)
+            {
+                continue;
+            }
+
+            var win = ChapterClassifier.FindIntro(m.Chapters, minDuration, maxDuration, m.Duration);
+            if (win is not null)
+            {
+                chapterIntro[job.Path] = new IntroResult
+                {
+                    File = job.Path,
+                    Show = job.Show,
+                    Season = job.Season,
+                    Start = win.Start,
+                    End = win.End
+                };
+            }
+
+            if (cfg.DetectOutros)
+            {
+                var ed = ChapterClassifier.FindOutro(m.Chapters, minDuration, maxDuration, m.Duration);
+                if (ed is not null)
+                {
+                    chapterOutro[job.Path] = (ed.Start, ed.End, ed.Label);
+                }
+            }
+        }
+
+        if (chapterIntro.Count > 0 || chapterOutro.Count > 0)
+        {
+            logger.LogInformation(
+                "[Episode Tools] Intro scan: {Intros} intro(s) and {Outros} outro(s) read from embedded chapters; those episodes skip fingerprinting.",
+                chapterIntro.Count,
+                chapterOutro.Count);
+        }
+
+        var totalMissing = jobs.Count(j => j.Points is null && !overrideMap.ContainsKey(j.Path) && !chapterIntro.ContainsKey(j.Path));
         var done = 0;
         var found = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
 
@@ -462,8 +507,14 @@ internal static class IntrosRunner
             }
         }
 
-        // Overrides take precedence over anything a previous scan found.
+        // Overrides take precedence over anything a previous scan found, then chapter
+        // results (frame-exact) over anything a previous fingerprint-based scan found.
         foreach (var kvp in overrideMap)
+        {
+            found[kvp.Key] = kvp.Value;
+        }
+
+        foreach (var kvp in chapterIntro)
         {
             found[kvp.Key] = kvp.Value;
         }
@@ -515,8 +566,8 @@ internal static class IntrosRunner
                 _lastProgress = 100.0 * seasonIndex / seasons.Count;
             }
 
-            var queue = season.Where(j => j.Points is { Length: > 0 } && !overrideMap.ContainsKey(j.Path)).ToList();
-            var missing = season.Where(j => j.Points is null && !overrideMap.ContainsKey(j.Path)).ToList();
+            var queue = season.Where(j => j.Points is { Length: > 0 } && !overrideMap.ContainsKey(j.Path) && !chapterIntro.ContainsKey(j.Path)).ToList();
+            var missing = season.Where(j => j.Points is null && !overrideMap.ContainsKey(j.Path) && !chapterIntro.ContainsKey(j.Path)).ToList();
 
             if (missing.Count > 0)
             {
@@ -543,16 +594,21 @@ internal static class IntrosRunner
                     }).ConfigureAwait(false);
             }
 
-            queue = season.Where(j => j.Points is { Length: > 0 } && !overrideMap.ContainsKey(j.Path)).ToList();
+            queue = season.Where(j => j.Points is { Length: > 0 } && !overrideMap.ContainsKey(j.Path) && !chapterIntro.ContainsKey(j.Path)).ToList();
             if (queue.Count < 2)
             {
-                // Overridden episodes of this season keep their configured intro even when
-                // fewer than two episodes are left for pairing.
+                // Overridden and chapter-covered episodes of this season keep their exact
+                // intro even when fewer than two episodes are left for pairing — a lone
+                // special with a tagged OP now gets a skip button too.
                 foreach (var j in season)
                 {
                     if (overrideMap.TryGetValue(j.Path, out var ov))
                     {
                         found[j.Path] = ov;
+                    }
+                    else if (chapterIntro.TryGetValue(j.Path, out var ci))
+                    {
+                        found[j.Path] = ci;
                     }
                 }
 
@@ -578,12 +634,17 @@ internal static class IntrosRunner
                 found.Remove(stale);
             }
 
-            // Re-stamp overrides for this season: the wipe above must not drop them.
+            // Re-stamp overrides and chapter results for this season: the wipe above must
+            // not drop them.
             foreach (var j in season)
             {
                 if (overrideMap.TryGetValue(j.Path, out var ov))
                 {
                     found[j.Path] = ov;
+                }
+                else if (chapterIntro.TryGetValue(j.Path, out var ci))
+                {
+                    found[j.Path] = ci;
                 }
             }
 
@@ -683,7 +744,7 @@ internal static class IntrosRunner
         // groups, fingerprinting the last minutes of each file and matching those.
         if (cfg.DetectOutros)
         {
-            await ScanOutrosAsync(cfg, jobs, seasons, cacheDir, meta, minDuration, maxDuration, found, WriteState, logger, ct)
+            await ScanOutrosAsync(cfg, jobs, seasons, cacheDir, meta, chapterOutro, minDuration, maxDuration, found, WriteState, logger, ct)
                 .ConfigureAwait(false);
         }
 
@@ -1716,6 +1777,7 @@ internal static class IntrosRunner
         List<IGrouping<string, Job>> seasons,
         string introCacheDir,
         Dictionary<string, (double Duration, List<ChapterPoint> Chapters)> meta,
+        Dictionary<string, (double Start, double End, string Label)> chapterOutro,
         int minDuration,
         int maxDuration,
         Dictionary<string, IntroResult> found,
@@ -1738,6 +1800,12 @@ internal static class IntrosRunner
         var noDuration = 0;
         foreach (var job in jobs)
         {
+            if (chapterOutro.ContainsKey(job.Path))
+            {
+                // Frame-exact from the container: no fingerprint, no pairing needed.
+                continue;
+            }
+
             if (TryLoadCachedOutro(cacheDir, job.Path, window, job.Size, job.ModifiedUtc, out var cached))
             {
                 points[job.Path] = cached;
@@ -1757,6 +1825,21 @@ internal static class IntrosRunner
             logger.LogInformation(
                 "[Episode Tools] Outro scan: skipping {Count} episode(s) whose duration could not be read.",
                 noDuration);
+        }
+
+        // Chapter-derived outros are frame-exact; stamp them before the pairing pass (with
+        // the same base start/end the intro pass found) so they survive the season loop.
+        foreach (var job in jobs)
+        {
+            if (chapterOutro.TryGetValue(job.Path, out var co))
+            {
+                StampOutro(found, job, co.Start, co.End);
+            }
+        }
+
+        if (chapterOutro.Count > 0)
+        {
+            writeState();
         }
 
         var totalMissing = missing.Count;
@@ -1822,10 +1905,12 @@ internal static class IntrosRunner
             }
 
             // A match that disappeared must disappear from the results too: clear this
-            // season's stored outros before writing the fresh ones.
+            // season's stored outros before writing the fresh ones. Chapter-derived
+            // outros are frame-exact and never cleared by the pairing result.
             foreach (var job in season)
             {
-                if (found.TryGetValue(job.Path, out var entry) &&
+                if (!chapterOutro.ContainsKey(job.Path) &&
+                    found.TryGetValue(job.Path, out var entry) &&
                     (entry.OutroStart is not null || entry.OutroEnd is not null))
                 {
                     found[job.Path] = new IntroResult
@@ -1879,20 +1964,7 @@ internal static class IntrosRunner
 
             foreach (var kvp in matched)
             {
-                var job = kvp.Value.Job;
-                var baseResult = found.TryGetValue(job.Path, out var existing)
-                    ? existing
-                    : new IntroResult { File = job.Path, Show = job.Show, Season = job.Season };
-                found[job.Path] = new IntroResult
-                {
-                    File = job.Path,
-                    Show = job.Show,
-                    Season = job.Season,
-                    Start = baseResult.Start,
-                    End = baseResult.End,
-                    OutroStart = Math.Round(kvp.Value.Start, 2),
-                    OutroEnd = Math.Round(kvp.Value.End, 2)
-                };
+                StampOutro(found, kvp.Value.Job, kvp.Value.Start, kvp.Value.End);
             }
 
             writeState();
@@ -1921,6 +1993,28 @@ internal static class IntrosRunner
         logger.LogInformation(
             "[Episode Tools] Outro scan finished: {Count} outro(s) detected.",
             outroCount);
+    }
+
+    /// <summary>
+    /// Writes one outro (from chapters or from pairing) into the results, preserving the
+    /// intro bounds the intro pass found for the same file.
+    /// </summary>
+    private static void StampOutro(
+        Dictionary<string, IntroResult> found, Job job, double start, double end)
+    {
+        var baseResult = found.TryGetValue(job.Path, out var existing)
+            ? existing
+            : new IntroResult { File = job.Path, Show = job.Show, Season = job.Season };
+        found[job.Path] = new IntroResult
+        {
+            File = job.Path,
+            Show = job.Show,
+            Season = job.Season,
+            Start = baseResult.Start,
+            End = baseResult.End,
+            OutroStart = Math.Round(start, 2),
+            OutroEnd = Math.Round(end, 2)
+        };
     }
 
     /// <summary>Range of contiguous time.</summary>
