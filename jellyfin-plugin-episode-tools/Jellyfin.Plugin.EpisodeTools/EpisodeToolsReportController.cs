@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MediaBrowser.Controller.Session;
@@ -37,7 +39,99 @@ public class EpisodeToolsReportController : ControllerBase
     {
         _logger = logger;
         PlaybackGuard.Configure(sessionManager);
-        ScriptRunner.ConfigureTaskManager(taskManager);    }
+        ScriptRunner.ConfigureTaskManager(taskManager);
+    }
+
+    private static string WorkDir =>
+        Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools");
+
+    private static string TrashRoot => Path.Combine(WorkDir, "trash");
+
+    /// <summary>Group folder names may never carry separators or traversal.</summary>
+    private static string SanitizeGroup(string group)
+    {
+        var sb = new StringBuilder();
+        foreach (var c in group)
+        {
+            sb.Append(char.IsLetterOrDigit(c) || c == '_' || c == '-' ? c : '_');
+        }
+
+        return sb.ToString();
+    }
+
+    private static string ManifestPathFor(string trashDir) => Path.Combine(trashDir, "manifest.json");
+
+    /// <summary>One archived file's metadata, kept in a small per-group manifest.json.</summary>
+    public sealed class TrashEntry
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonPropertyName("originalPath")]
+        public string? OriginalPath { get; set; }
+
+        [JsonPropertyName("size")]
+        public long Size { get; set; }
+
+        [JsonPropertyName("trashedAt")]
+        public DateTime TrashedAt { get; set; }
+    }
+
+    /// <summary>
+    /// Moves one file into the trash archive under a group folder, picking a free name so
+    /// same-basename files never overwrite each other, and appends a manifest entry with
+    /// the original path (which powers one-click restore).
+    /// </summary>
+    private static void SaveToTrash(string sourcePath, string originalPath, string group)
+    {
+        var trashDir = Path.Combine(TrashRoot, SanitizeGroup(group));
+        Directory.CreateDirectory(trashDir);
+
+        var fileName = Path.GetFileName(sourcePath);
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var ext = Path.GetExtension(fileName);
+        var dest = Path.Combine(trashDir, fileName);
+        for (var n = 1; File.Exists(dest); n++)
+        {
+            dest = Path.Combine(trashDir, stem + "_" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + ext);
+        }
+
+        File.Move(sourcePath, dest);
+
+        var entry = new TrashEntry
+        {
+            Name = Path.GetFileName(dest),
+            OriginalPath = originalPath,
+            Size = new FileInfo(dest).Length,
+            TrashedAt = DateTime.UtcNow
+        };
+
+        var entries = new List<TrashEntry>();
+        try
+        {
+            if (File.Exists(ManifestPathFor(trashDir)))
+            {
+                entries = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(trashDir)))
+                    ?? new List<TrashEntry>();
+            }
+        }
+        catch (Exception)
+        {
+            // A corrupt manifest starts fresh; the file itself stays restorable by hand.
+        }
+
+        entries.Add(entry);
+        try
+        {
+            var tmp = ManifestPathFor(trashDir) + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, ManifestPathFor(trashDir), true);
+        }
+        catch (Exception)
+        {
+            // Manifest writes are best effort.
+        }
+    }
 
     /// <summary>Returns raw JSON without re-serializing it into a JSON string.</summary>
     private ContentResult ContentJson(string json)
@@ -416,6 +510,504 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
+    /// One-click default subtitle track repair (Sub Check tab). Body: {path, wrong, pick}
+    /// where wrong/pick are zero-based indices among the file's SUBTITLE streams (as
+    /// reported by the SubFix lines). .mkv: instant in-place flag edit via mkvpropedit when
+    /// available. .mp4/.m4v/.mov: lossless stream-copy remux with corrected dispositions,
+    /// replaced only after verification; the original is archived to the plugin trash.
+    /// </summary>
+    [HttpPost("FixDefaultTrack")]
+    public async Task<IActionResult> FixDefaultTrack([FromBody] FixDefaultBody body)
+    {
+        var cfg = Plugin.Instance?.Configuration;
+        if (cfg is null)
+        {
+            return StatusCode(500, "Plugin not initialized.");
+        }
+
+        var path = (body.Path ?? string.Empty).Trim();
+        if (path.Length == 0 || !System.IO.File.Exists(path))
+        {
+            return NotFound("File not found.");
+        }
+
+        var allowed = new List<string>(cfg.EffectiveRenameFolders);
+        allowed.AddRange(cfg.EffectiveConvertFolders);
+        if (!allowed.Any(root => root.Length > 0 &&
+            path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            return BadRequest("File is not under a configured series/scan folder.");
+        }
+
+        if (body.Wrong is null || body.Pick is null || body.Wrong < 0 || body.Pick < 0 || body.Wrong == body.Pick)
+        {
+            return BadRequest("Invalid track indices.");
+        }
+
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not (".mkv" or ".mp4" or ".m4v" or ".mov"))
+        {
+            return BadRequest("Only .mkv, .mp4, .m4v and .mov files can be fixed.");
+        }
+
+        try
+        {
+            var result = await FixDefaultTrackAsync(path, ext, body.Wrong.Value, body.Pick.Value);
+            _logger.LogInformation("[Episode Tools] Default subtitle flag fixed for {Path}: {Result}", path, result);
+            return ContentText(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Episode Tools] Default track fix failed for {Path}.", path);
+            return StatusCode(500, "Fix failed: " + ex.Message);
+        }
+    }
+
+    private async Task<string> FixDefaultTrackAsync(string path, string ext, int wrongRel, int pickRel)
+    {
+        if (ext == ".mkv")
+        {
+            var mkvpropedit = await FindToolAsync("mkvpropedit").ConfigureAwait(false);
+            if (mkvpropedit is not null)
+            {
+                // mkvpropedit uses 1-based track:s selectors; the edit is an in-place
+                // header change, so no remux/replace cycle is needed at all.
+                var args = new List<string>
+                {
+                    "--edit", $"track:s{wrongRel + 1}", "--set", "flag-default=0",
+                    "--edit", $"track:s{pickRel + 1}", "--set", "flag-default=1",
+                    path
+                };
+                var (code, output) = await RunToolAsync(mkvpropedit, args).ConfigureAwait(false);
+                if (code != 0)
+                {
+                    throw new InvalidOperationException("mkvpropedit failed (exit " + code + "): " + output);
+                }
+
+                return "fixed in place with mkvpropedit";
+            }
+        }
+
+        // Fallback for .mkv without mkvpropedit, and the main path for .mp4/.m4v/.mov:
+        // a lossless stream-copy remux with the dispositions swapped. The tmp file is only
+        // swapped in after verification, so the source can never end up broken.
+        var dir = Path.GetDirectoryName(path) ?? ".";
+        var tmp = Path.Combine(dir, Path.GetFileName(path) + ".subfix.part");
+        try
+        {
+            var format = ext == ".mkv" ? "matroska" : "mp4";
+            var args = new List<string>
+            {
+                "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", path,
+                "-map", "0", "-c", "copy",
+                "-disposition:s:" + wrongRel.ToString(System.Globalization.CultureInfo.InvariantCulture), "0",
+                "-disposition:s:" + pickRel.ToString(System.Globalization.CultureInfo.InvariantCulture), "default",
+                "-f", format,
+                tmp
+            };
+            if (format == "mp4")
+            {
+                // The bin_data trap: remuxing MP4s must never carry chapter/data tracks
+                // (ExoPlayer refuses to play files that contain them).
+                args.Insert(args.IndexOf("-f"), "-dn");
+                args.Insert(args.IndexOf("-f"), "-map_chapters");
+                args.Insert(args.IndexOf("-f"), "0");
+            }
+
+            var ffmpeg = FfmpegPath();
+            var (code, output) = await RunToolAsync(ffmpeg, args).ConfigureAwait(false);
+            if (code != 0 || !System.IO.File.Exists(tmp) || new FileInfo(tmp).Length < 1024)
+            {
+                throw new InvalidOperationException("ffmpeg remux failed (exit " + code + "): " + output);
+            }
+
+            if (!await VerifySingleDefaultTrackAsync(tmp, ext, pickRel).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException("the fixed file did not pass verification (default flag not on the requested track)");
+            }
+
+            // Verified: swap atomically, keep the original restorable in the trash.
+            var backup = path + ".subfix-old";
+            System.IO.File.Move(path, backup);
+            try
+            {
+                System.IO.File.Move(tmp, path);
+            }
+            catch (Exception)
+            {
+                System.IO.File.Move(backup, path);   // restore on failure
+                throw;
+            }
+
+            SaveToTrash(backup, path, "default-track-fix");
+            return "fixed with a verified lossless remux (original archived to the plugin trash)";
+        }
+        finally
+        {
+            try
+            {
+                if (System.IO.File.Exists(tmp))
+                {
+                    System.IO.File.Delete(tmp);
+                }
+            }
+            catch (Exception)
+            {
+                // Cleanup is best effort.
+            }
+        }
+    }
+
+    private static string FfmpegPath()
+    {
+        foreach (var candidate in new[]
+                 {
+                     Environment.GetEnvironmentVariable("JELLYFIN_FFMPEG"),
+                     "/usr/lib/jellyfin-ffmpeg/ffmpeg",
+                     "/usr/bin/ffmpeg",
+                     "/usr/local/bin/ffmpeg",
+                     "ffmpeg"
+                 })
+        {
+            if (string.IsNullOrEmpty(candidate))
+            {
+                continue;
+            }
+
+            if (!candidate.Contains(Path.DirectorySeparatorChar) || System.IO.File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "ffmpeg";
+    }
+
+    private static string FfprobePath()
+    {
+        var env = Environment.GetEnvironmentVariable("JELLYFIN_FFMPEG");
+        foreach (var candidate in new[]
+                 {
+                     string.IsNullOrEmpty(env) ? null : Path.Combine(Path.GetDirectoryName(env) ?? ".", "ffprobe"),
+                     "/usr/lib/jellyfin-ffmpeg/ffprobe",
+                     "/usr/bin/ffprobe",
+                     "/usr/local/bin/ffprobe",
+                     "ffprobe"
+                 })
+        {
+            if (string.IsNullOrEmpty(candidate))
+            {
+                continue;
+            }
+
+            if (!candidate.Contains(Path.DirectorySeparatorChar) || System.IO.File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "ffprobe";
+    }
+
+    /// <summary>Probes a tool on PATH or at its usual absolute locations.</summary>
+    private static async Task<string?> FindToolAsync(string tool)
+    {
+        foreach (var candidate in new[] { "/usr/bin/" + tool, "/usr/local/bin/" + tool, tool })
+        {
+            try
+            {
+                var psi = new ProcessStartInfo(candidate)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                psi.ArgumentList.Add("--version");
+                using var process = Process.Start(psi);
+                if (process is null)
+                {
+                    continue;
+                }
+
+                process.WaitForExit(3000);
+                if (process.HasExited && process.ExitCode == 0)
+                {
+                    return candidate;
+                }
+            }
+            catch (Exception)
+            {
+                // Try the next candidate.
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task<(int Code, string Output)> RunToolAsync(string executable, IReadOnlyList<string> args)
+    {
+        var psi = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(psi);
+        if (process is null)
+        {
+            throw new InvalidOperationException("Could not start " + executable + ".");
+        }
+
+        var stdout = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+        var stderr = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+        await process.WaitForExitAsync().ConfigureAwait(false);
+        return (process.ExitCode, (stdout + " " + stderr).Trim());
+    }
+
+    /// <summary>
+    /// Verifies that exactly one subtitle stream of the file is flagged default and that
+    /// it is the requested one (relative index among the subtitle streams).
+    /// </summary>
+    private static async Task<bool> VerifySingleDefaultTrackAsync(string file, string ext, int pickRel)
+    {
+        try
+        {
+            var args = new List<string>
+            {
+                "-v", "error",
+                "-select_streams", "s",
+                "-show_entries", "stream=index:stream_disposition=default",
+                "-of", "json",
+                file
+            };
+            var (code, output) = await RunToolAsync(FfprobePath(), args).ConfigureAwait(false);
+            if (code != 0)
+            {
+                return false;
+            }
+
+            using var doc = JsonDocument.Parse(output);
+            if (!doc.RootElement.TryGetProperty("streams", out var streams))
+            {
+                return false;
+            }
+
+            var defaults = 0;
+            var defaultRel = -1;
+            var rel = 0;
+            foreach (var stream in streams.EnumerateArray())
+            {
+                if (stream.TryGetProperty("disposition", out var d) &&
+                    d.TryGetProperty("default", out var dv) &&
+                    dv.ValueKind == JsonValueKind.Number && dv.GetInt32() == 1)
+                {
+                    defaults++;
+                    defaultRel = rel;
+                }
+
+                rel++;
+            }
+
+            _ = ext;
+            return defaults == 1 && defaultRel == pickRel;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Lists the trash archive: one entry per group folder with manifest metadata (original
+    /// path, size, trashed date) plus unmanifested stray files.
+    /// </summary>
+    [HttpGet("Trash")]
+    public IActionResult GetTrash()
+    {
+        var root = TrashRoot;
+        var groups = new List<object>();
+        long totalBytes = 0;
+        var totalFiles = 0;
+
+        if (Directory.Exists(root))
+        {
+            foreach (var dir in Directory.EnumerateDirectories(root))
+            {
+                var entries = new List<object>();
+                var manifest = new List<TrashEntry>();
+                try
+                {
+                    if (File.Exists(ManifestPathFor(dir)))
+                    {
+                        manifest = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(dir)))
+                            ?? new List<TrashEntry>();
+                    }
+                }
+                catch (Exception)
+                {
+                    // Listed through the file fallback below.
+                }
+
+                var claimed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var entry in manifest)
+                {
+                    var f = Path.Combine(dir, entry.Name);
+                    if (!System.IO.File.Exists(f))
+                    {
+                        continue;
+                    }
+
+                    claimed.Add(entry.Name);
+                    totalFiles++;
+                    totalBytes += entry.Size;
+                    entries.Add(new { name = entry.Name, size = entry.Size, originalPath = entry.OriginalPath, trashedAt = entry.TrashedAt });
+                }
+
+                foreach (var f in Directory.EnumerateFiles(dir))
+                {
+                    var name = Path.GetFileName(f);
+                    if (string.Equals(name, "manifest.json", StringComparison.OrdinalIgnoreCase) || claimed.Contains(name))
+                    {
+                        continue;
+                    }
+
+                    var fi = new FileInfo(f);
+                    totalFiles++;
+                    totalBytes += fi.Length;
+                    entries.Add(new { name, size = fi.Length, originalPath = (string?)null, trashedAt = (DateTime?)fi.LastWriteTimeUtc });
+                }
+
+                if (entries.Count > 0)
+                {
+                    groups.Add(new { group = Path.GetFileName(dir), files = entries });
+                }
+            }
+        }
+
+        return ContentJson(JsonSerializer.Serialize(
+            new { groups, totalFiles, totalBytes },
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    }
+
+    /// <summary>
+    /// Restores one archived file to its original location (from the manifest, or an
+    /// explicitly supplied path). Never overwrites an existing target.
+    /// </summary>
+    [HttpPost("Trash/Restore")]
+    public IActionResult RestoreTrash([FromBody] TrashRestoreBody body)
+    {
+        var group = (body.Group ?? string.Empty).Trim();
+        var name = (body.Name ?? string.Empty).Trim();
+        if (group.Length == 0 || name.Length == 0 || name.Contains('/') || name.Contains('\\') || name.Contains(".."))
+        {
+            return BadRequest("Invalid trash entry.");
+        }
+
+        var trashDir = Path.Combine(TrashRoot, SanitizeGroup(group));
+        var source = Path.Combine(trashDir, name);
+        if (!System.IO.File.Exists(source))
+        {
+            return NotFound("That file is not in the trash archive.");
+        }
+
+        var dest = (body.Path ?? string.Empty).Trim();
+        if (dest.Length == 0)
+        {
+            // Fall back to the manifest's original path.
+            try
+            {
+                var manifest = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(trashDir)));
+                dest = manifest?.FirstOrDefault(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase))?.OriginalPath ?? string.Empty;
+            }
+            catch (Exception)
+            {
+                dest = string.Empty;
+            }
+        }
+
+        if (dest.Length == 0)
+        {
+            return BadRequest("No restore destination known for this file.");
+        }
+
+        if (System.IO.File.Exists(dest) || Directory.Exists(dest))
+        {
+            return StatusCode(409, "Restore would overwrite: " + dest + " already exists.");
+        }
+
+        var destDir = Path.GetDirectoryName(dest);
+        if (string.IsNullOrEmpty(destDir) || !Directory.Exists(destDir))
+        {
+            return BadRequest("Restore destination folder does not exist: " + destDir);
+        }
+
+        try
+        {
+            System.IO.File.Move(source, dest);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Episode Tools] Could not restore {Name} to {Dest}.", name, dest);
+            return StatusCode(500, "Restore failed: " + ex.Message);
+        }
+
+        // Drop the manifest entry so the listing stays truthful.
+        try
+        {
+            var manifest = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(trashDir)))
+                ?? new List<TrashEntry>();
+            var remaining = manifest.Where(e => !string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
+            var tmp = ManifestPathFor(trashDir) + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(remaining, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, ManifestPathFor(trashDir), true);
+        }
+        catch (Exception)
+        {
+            // Best effort.
+        }
+
+        _logger.LogInformation("[Episode Tools] Restored {Name} from the trash to {Dest}.", name, dest);
+        return ContentText("restored to " + dest);
+    }
+
+    /// <summary>Empties the whole trash archive (the files in it were already removed).</summary>
+    [HttpPost("Trash/Empty")]
+    public IActionResult EmptyTrash()
+    {
+        var root = TrashRoot;
+        if (!Directory.Exists(root))
+        {
+            return ContentText("trash is already empty");
+        }
+
+        var dirs = Directory.EnumerateDirectories(root).ToList();
+        var removed = 0;
+        foreach (var dir in dirs)
+        {
+            try
+            {
+                Directory.Delete(dir, true);
+                removed++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Episode Tools] Could not remove trash folder {Dir}.", dir);
+            }
+        }
+
+        _logger.LogInformation("[Episode Tools] Trash emptied: {Count} group folder(s) removed.", removed);
+        return ContentText("trash emptied (" + removed + " group folder(s))");
+    }
+
+    /// <summary>
     /// Returns the intro scan status plus the latest results. While a scan is running the
     /// dashboard polls every two seconds, so only the progress fields plus the result
     /// count are sent then; serializing the full intros list each poll is pure churn on
@@ -569,21 +1161,9 @@ public class EpisodeToolsReportController : ControllerBase
                 }
                 else
                 {
-                    // Never overwrite an already-archived file: duplicate groups often hold
-                    // the same basename in different folders, and a second move with
-                    // overwrite would silently destroy the first archived copy.
-                    var fileName = Path.GetFileName(path);
-                    var stem = Path.GetFileNameWithoutExtension(fileName);
-                    var ext = Path.GetExtension(fileName);
-                    var dest = Path.Combine(trashDir, fileName);
-                    for (var n = 1; System.IO.File.Exists(dest); n++)
-                    {
-                        dest = Path.Combine(
-                            trashDir,
-                            stem + "_" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + ext);
-                    }
-
-                    System.IO.File.Move(path, dest);
+                    // Archive to the trash with a manifest entry (never overwriting an
+                    // already-archived file), so it can be restored later.
+                    SaveToTrash(path, path, key);
                 }
 
                 removed.Add(path);
@@ -664,6 +1244,38 @@ public class EpisodeToolsReportController : ControllerBase
         /// <summary>Gets or sets the absolute show folder to convert.</summary>
         [JsonPropertyName("folder")]
         public string? Folder { get; set; }
+    }
+
+    /// <summary>Request body for FixDefaultTrack.</summary>
+    public sealed class FixDefaultBody
+    {
+        /// <summary>Gets or sets the absolute video file path.</summary>
+        [JsonPropertyName("path")]
+        public string? Path { get; set; }
+
+        /// <summary>Gets or sets the wrong default subtitle track (relative index).</summary>
+        [JsonPropertyName("wrong")]
+        public int? Wrong { get; set; }
+
+        /// <summary>Gets or sets the recommended dialogue track (relative index).</summary>
+        [JsonPropertyName("pick")]
+        public int? Pick { get; set; }
+    }
+
+    /// <summary>Request body for Trash/Restore.</summary>
+    public sealed class TrashRestoreBody
+    {
+        /// <summary>Gets or sets the trash group folder name.</summary>
+        [JsonPropertyName("group")]
+        public string? Group { get; set; }
+
+        /// <summary>Gets or sets the file name inside the group.</summary>
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        /// <summary>Optional explicit destination (defaults to the manifest's original path).</summary>
+        [JsonPropertyName("path")]
+        public string? Path { get; set; }
     }
 
     /// <summary>Request body for AuditAction.</summary>

@@ -819,8 +819,9 @@
                                     </tbody>
                                 </table>
                                 <div class="epInfoLine" style="margin-top:1em;">
-                                    Fix options: enable <b>Drop signs/songs subtitle tracks</b> in Settings and run
-                                    <b>6. Re-convert MKV to MP4 (replaces existing .mp4)</b>; or set per-show subtitle/audio
+                                    Fix options: the <b>Fix Default</b> button repairs the default flag losslessly without re-encoding;
+                                    enable <b>Drop signs/songs subtitle tracks</b> in Settings and run
+                                    <b>6. Re-convert MKV to MP4 (replaces existing .mp4)</b> to drop the track entirely; or set per-show subtitle/audio
                                     defaults on the Shows tab and re-convert.
                                 </div>
                             </div>
@@ -891,6 +892,16 @@
                             <div class="verticalSection">
                                 <h3 class="sectionTitle">Largest files</h3>
                                 <div id="AuditBig"></div>
+                            </div>
+                            <div class="verticalSection" id="TrashSection">
+                                <h3 class="sectionTitle">Trash archive</h3>
+                                <div class="epInfoLine">Files removed by “Keep largest/newest, archive others” and verified default-track fixes live here until restored or emptied. Restoring moves a file back to its original place and never overwrites an existing file.</div>
+                                <div style="display:flex;gap:8px;align-items:center;margin-bottom:1em;">
+                                    <button id="TrashToggleBtn" type="button" class="raised button-mini">Show trash archive</button>
+                                    <button id="TrashEmptyBtn" type="button" class="raised button-mini">Empty trash</button>
+                                </div>
+                                <div id="TrashInfo" class="epInfoLine"></div>
+                                <div id="TrashList"></div>
                             </div>
                         </section>
 
@@ -1440,7 +1451,7 @@
                 for (var i = 0; i < lines.length; i++) {
                     var cols = lines[i].split('\t');
                     if (cols[0] === 'RUN') { mode = cols[1] || ''; date = cols[2] || ''; continue; }
-                    if (cols[0] !== 'SUBWARN' && cols[0] !== 'SUBOK' && cols[0] !== 'SUBINFO') continue;
+                    if (cols[0] !== 'SUBWARN' && cols[0] !== 'SUBOK' && cols[0] !== 'SUBINFO' && cols[0] !== 'SUBFIX') continue;
                     var p = cols[1] || '';
                     if (!byPath[p]) { byPath[p] = []; order.push(p); }
                     byPath[p].push({ kind: cols[0], msg: cols.slice(2).join(' ') });
@@ -1460,12 +1471,25 @@
 
                     var tdMsg = document.createElement('td');
                     findings.forEach(function (f) {
+                        var fix = f.kind === 'SUBFIX' ? parseSubFix(f.msg) : null;
                         var div = document.createElement('div');
                         div.style.wordBreak = 'break-all';
-                        div.textContent = (f.kind === 'SUBWARN' ? '⚠ ' : f.kind === 'SUBOK' ? '✓ ' : '· ') + f.msg;
+                        div.textContent = (f.kind === 'SUBWARN' ? '⚠ ' : f.kind === 'SUBFIX' ? '⤓ ' : f.kind === 'SUBOK' ? '✓ ' : '· ')
+                            + (f.kind === 'SUBFIX' ? f.msg.split(' | ')[0] : f.msg);
                         if (f.kind === 'SUBWARN') { div.style.color = '#c33'; }
+                        if (f.kind === 'SUBFIX') { div.style.color = '#2e8b57'; }
                         if (f.kind === 'SUBINFO') { div.style.opacity = '0.7'; }
                         tdMsg.appendChild(div);
+                        if (fix) {
+                            var fbtn = document.createElement('button');
+                            fbtn.setAttribute('is', 'emby-button');
+                            fbtn.setAttribute('type', 'button');
+                            fbtn.className = 'raised button-mini emby-button';
+                            fbtn.textContent = 'Fix Default';
+                            fbtn.title = 'Rewrite the default subtitle flag losslessly: mkvpropedit for .mkv, verified stream-copy remux for .mp4 (original archived in the plugin trash)';
+                            fbtn.addEventListener('click', function () { fixDefaultTrack(p, fix, fbtn); });
+                            tdMsg.appendChild(fbtn);
+                        }
                     });
                     tr.appendChild(tdMsg);
                     body.appendChild(tr);
@@ -1498,6 +1522,35 @@
 
             document.querySelector('#SubCheckFilter').addEventListener('input', applySubFilter);
             document.querySelector('#SubCheckOnlyProblems').addEventListener('change', applySubFilter);
+
+            /* ---------- one-click default track fix (F3) ---------- */
+            function parseSubFix(msg) {
+                var tail = (msg || '').split(' | ').pop() || '';
+                var m = /wrong=(\d+)\s+pick=(\d+)/.exec(tail);
+                return m ? { wrong: parseInt(m[1], 10), pick: parseInt(m[2], 10) } : null;
+            }
+
+            function fixDefaultTrack(path, fix, btn) {
+                if (!window.confirm('Rewrite the default subtitle flag on this file now?\n\n.mkv: instant in-place edit with mkvpropedit (when installed).\n.mp4/.m4v/.mov: lossless stream-copy remux, replaced only after verification — the original is archived in the plugin trash.\n\nRun the subtitle check again afterwards to refresh this report.')) {
+                    return;
+                }
+                btn.disabled = true;
+                btn.textContent = '…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/FixDefaultTrack'),
+                    dataType: 'text',
+                    data: JSON.stringify({ path: path, wrong: fix.wrong, pick: fix.pick }),
+                    contentType: 'application/json'
+                }).then(function (text) {
+                    btn.textContent = 'Fixed ✓';
+                    Dashboard.alert('Episode Tools: ' + (text || 'fixed') + '. Run the subtitle check again to refresh this report.');
+                }).catch(function () {
+                    btn.disabled = false;
+                    btn.textContent = 'Fix Default';
+                    Dashboard.alert('Episode Tools: fixing the default track failed — see Dashboard > Logs.');
+                });
+            }
 
             /* ---------- audit tab ---------- */
             var allDups = [];  // {key, files:[{path,size}], el}
@@ -1645,6 +1698,114 @@
                     Dashboard.hideLoadingMsg();
                 });
             }
+
+            /* ---------- trash archive (F5) ---------- */
+            var trashLoaded = false;
+
+            function fmtTrashSize(bytes) {
+                var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+                var n = parseFloat(bytes) || 0, u = 0;
+                while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+                return (u === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[u];
+            }
+
+            function renderTrash(data) {
+                var info = document.querySelector('#TrashInfo');
+                var list = document.querySelector('#TrashList');
+                list.innerHTML = '';
+                var totalFiles = data.totalFiles || 0;
+                info.textContent = totalFiles === 0
+                    ? 'The trash archive is empty.'
+                    : totalFiles + ' file(s), ' + fmtTrashSize(data.totalBytes) + ' — files are removed for good when you empty the trash.';
+
+                (data.groups || []).forEach(function (g) {
+                    var head = document.createElement('div');
+                    head.style.fontWeight = 'bold';
+                    head.style.marginTop = '0.6em';
+                    head.textContent = '• ' + (g.group || '?') + ' (' + (g.files || []).length + ')';
+                    list.appendChild(head);
+                    (g.files || []).forEach(function (f) {
+                        var row = document.createElement('div');
+                        row.style.cssText = 'word-break:break-all;margin-left:1em;display:flex;align-items:center;gap:8px;flex-wrap:wrap;';
+                        var label = document.createElement('span');
+                        label.textContent = '– ' + fmtTrashSize(f.size) + ' — ' + (f.originalPath || '(unknown original location)') + ' [' + (g.group || '') + '/' + f.name + ']';
+                        row.appendChild(label);
+                        var btn = document.createElement('button');
+                        btn.setAttribute('is', 'emby-button');
+                        btn.setAttribute('type', 'button');
+                        btn.className = 'raised button-mini emby-button';
+                        btn.textContent = 'Restore';
+                        if (!f.originalPath) {
+                            btn.disabled = true;
+                            btn.title = 'The original location is unknown (archived by an older plugin version). Move the file back manually from the trash folder.';
+                        } else {
+                            btn.addEventListener('click', function () { restoreTrash(g.group, f.name, btn); });
+                        }
+                        row.appendChild(btn);
+                        list.appendChild(row);
+                    });
+                });
+
+                if (totalFiles === 0) {
+                    list.innerHTML = '';
+                }
+            }
+
+            function loadTrash() {
+                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('EpisodeTools/Trash'), dataType: 'json' })
+                    .then(function (data) {
+                        trashLoaded = true;
+                        renderTrash(data || {});
+                    }).catch(function () {
+                        document.querySelector('#TrashInfo').textContent = 'Could not load the trash archive.';
+                    });
+            }
+
+            function restoreTrash(group, name, btn) {
+                btn.disabled = true;
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/Trash/Restore'),
+                    dataType: 'text',
+                    data: JSON.stringify({ group: group, name: name }),
+                    contentType: 'application/json'
+                }).then(function (text) {
+                    Dashboard.alert('Episode Tools: ' + (text || 'restored'));
+                    loadTrash();
+                }).catch(function (xhr) {
+                    btn.disabled = false;
+                    var msg = 'Episode Tools: restoring failed';
+                    try { msg += ' — ' + (xhr.responseText || JSON.parse(xhr).Message || ''); } catch (e) { /* ignore */ }
+                    Dashboard.alert(msg + '. See Dashboard > Logs.');
+                });
+            }
+
+            document.querySelector('#TrashToggleBtn').addEventListener('click', function () {
+                var btn = this;
+                var list = document.querySelector('#TrashList');
+                var hidden = list.style.display === 'none';
+                if (hidden) {
+                    list.style.display = '';
+                    btn.textContent = 'Hide trash archive';
+                    loadTrash();
+                } else {
+                    list.style.display = 'none';
+                    btn.textContent = 'Show trash archive';
+                }
+            });
+
+            document.querySelector('#TrashEmptyBtn').addEventListener('click', function () {
+                if (!window.confirm('Permanently delete everything in the plugin trash archive?\n\nThe files in it were already removed from your library; this cannot be undone.')) {
+                    return;
+                }
+                ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl('EpisodeTools/Trash/Empty'), dataType: 'text' })
+                    .then(function (text) {
+                        Dashboard.alert('Episode Tools: ' + (text || 'trash emptied'));
+                        loadTrash();
+                    }).catch(function () {
+                        Dashboard.alert('Episode Tools: emptying the trash failed — see Dashboard > Logs.');
+                    });
+            });
 
             /* ---------- intros tab ---------- */
             var introsTimer = null;

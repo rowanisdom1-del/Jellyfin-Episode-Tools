@@ -269,6 +269,21 @@ def check_episode(path, base, files, tools, report_file, emit, rep):
                 emit(f"  !! {msg}")
                 rep("SUBWARN", msg)
                 problems += 1
+                # One-click fix metadata: recommend the first non-signs/songs track as
+                # the new default. The relative indices (position among the subtitle
+                # streams) are what ffmpeg (-disposition:s:N) and mkvpropedit (track:sN)
+                # need; the absolute ffprobe indices identify tracks in reports.
+                candidates = [t for t in text_streams
+                              if t is not s and not RE_SUSPICIOUS_TITLE.search(" " + (t["title"] or "") + " ")]
+                if candidates:
+                    pick = candidates[0]
+                    wrong_rel = text_streams.index(s)
+                    pick_rel = text_streams.index(pick)
+                    fix = (f"fixable: default track #{s['index']} is a signs/songs track; "
+                           f"make track #{pick['index']} (lang={pick['language'] or 'und'}) the default "
+                           f"| wrong={wrong_rel} pick={pick_rel}")
+                    emit(f"  >> {fix.split(' | ')[0]}")
+                    rep("SUBFIX", fix)
 
     # Analyse the default track (or the only track).
     targets = [(idx, s) for idx, s in enumerate(text_streams) if s["default"]]
