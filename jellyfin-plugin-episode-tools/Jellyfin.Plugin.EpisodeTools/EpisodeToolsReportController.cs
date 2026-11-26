@@ -182,11 +182,16 @@ public class EpisodeToolsReportController : ControllerBase
             scanned++;
             foreach (var showDir in Directory.EnumerateDirectories(folder, "*", options))
             {
-                var name = Path.GetFileName(showDir);
-                if (!seen.Add(name))
+                // Deduplicate by full path, never by leaf name: identically named folders in
+                // different libraries (e.g. two shows called "ted") are different shows and
+                // must both appear. Matches EnumerateJobs in IntrosRunner.
+                var dirKey = showDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!seen.Add(dirKey))
                 {
                     continue;
                 }
+
+                var name = Path.GetFileName(showDir);
 
                 int episodes = 0, mkv = 0;
                 var langs = new List<string>();
@@ -398,21 +403,41 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
-    /// Returns the intro scan status plus the latest results.
+    /// Returns the intro scan status plus the latest results. While a scan is running the
+    /// dashboard polls every two seconds, so only the progress fields plus the result
+    /// count are sent then; serializing the full intros list each poll is pure churn on
+    /// low-power servers. The full list comes back once no scan is running.
     /// </summary>
     [HttpGet("IntrosStatus")]
     public IActionResult IntrosStatus()
     {
-        var results = IntrosRunner.LoadResults();
+        var scan = IntrosRunner.Status();
         var resultsFile = System.IO.Path.Combine(Plugin.Instance?.WorkFolder ?? ".", "intros.json");
         var scannedAt = System.IO.File.Exists(resultsFile)
             ? System.IO.File.GetLastWriteTimeUtc(resultsFile)
             : (DateTime?)null;
 
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+        };
+
+        if (IntrosRunner.Running)
+        {
+            return ContentJson(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                scan,
+                scannedAt,
+                count = IntrosRunner.LoadResults().Count
+            }, options));
+        }
+
+        var results = IntrosRunner.LoadResults();
         var payload = new
         {
-            scan = IntrosRunner.Status(),
+            scan,
             scannedAt,
+            count = results.Count,
             intros = results.Select(r => new
             {
                 show = r.Show,
@@ -423,10 +448,7 @@ public class EpisodeToolsReportController : ControllerBase
             })
         };
 
-        return ContentJson(System.Text.Json.JsonSerializer.Serialize(payload, new System.Text.Json.JsonSerializerOptions
-        {
-            PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
-        }));
+        return ContentJson(System.Text.Json.JsonSerializer.Serialize(payload, options));
     }
 
     /// <summary>

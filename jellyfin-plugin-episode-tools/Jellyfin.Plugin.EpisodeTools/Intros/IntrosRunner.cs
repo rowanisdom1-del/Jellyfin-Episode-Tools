@@ -515,7 +515,7 @@ internal static class IntrosRunner
                     async (item, token) =>
                     {
                         var b = item.Bound;
-                        var end = AdjustEndToSilence(item.Job.Path, b.Start, b.End, logger, token);
+                        var end = await AdjustEndToSilence(item.Job.Path, b.Start, b.End, logger, token).ConfigureAwait(false);
                         if (end - b.Start < minDuration)
                         {
                             // The snap shrank the intro below the configured minimum (quiet
@@ -774,11 +774,16 @@ internal static class IntrosRunner
     private static async Task<uint[]?> FingerprintAsync(
         string path, int windowSeconds, ILogger logger, CancellationToken ct)
     {
-        var args = string.Format(
-            CultureInfo.InvariantCulture,
-            "-hide_banner -loglevel warning -t {0} -i \"{1}\" -ac 2 -f chromaprint -fp_format raw -",
-            windowSeconds,
-            path);
+        var args = new[]
+        {
+            "-hide_banner", "-loglevel", "warning",
+            "-t", windowSeconds.ToString(CultureInfo.InvariantCulture),
+            "-i", path,
+            "-ac", "2",
+            "-f", "chromaprint",
+            "-fp_format", "raw",
+            "-"
+        };
 
         try
         {
@@ -862,15 +867,23 @@ internal static class IntrosRunner
     }
 
     private static async Task<byte[]> RunProcessAsync(
-        string executable, string args, bool stderr, ILogger logger, CancellationToken ct)
+        string executable, string[] args, bool stderr, ILogger logger, CancellationToken ct)
     {
-        var info = new ProcessStartInfo(executable, args)
+        var info = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = !stderr,
             RedirectStandardError = stderr
         };
+
+        // ArgumentList instead of a formatted command string: paths containing quotes,
+        // spaces or other metacharacters must never be re-tokenized by hand (the runtime
+        // parses an Arguments string itself on Unix, and a raw double quote breaks it).
+        foreach (var arg in args)
+        {
+            info.ArgumentList.Add(arg);
+        }
 
         using var process = new Process { StartInfo = info };
         await using var registration = ct.Register(() =>
@@ -1052,7 +1065,7 @@ internal static class IntrosRunner
 
     // ------------------------------------------------------------------ silence snap
 
-    private static double AdjustEndToSilence(
+    private static async Task<double> AdjustEndToSilence(
         string path, double introStart, double introEnd, ILogger logger, CancellationToken ct)
     {
         try
@@ -1061,14 +1074,20 @@ internal static class IntrosRunner
             // contain the silence we are looking for, so this cuts the decode roughly 5x.
             // Input seeking rebases output timestamps to 0, hence the seek offset below.
             var seek = Math.Max(0, (int)introEnd - 17);
-            var args = string.Format(
-                CultureInfo.InvariantCulture,
-                "-hide_banner -loglevel info -vn -sn -dn -ss {0} -i \"{1}\" -to {2} -af \"silencedetect=noise=-50dB:duration=0.1\" -f null -",
-                seek,
-                path,
-                Math.Max(1, (int)introEnd + 2 - seek));
+            var args = new[]
+            {
+                "-hide_banner", "-loglevel", "info",
+                "-vn", "-sn", "-dn",
+                "-ss", seek.ToString(CultureInfo.InvariantCulture),
+                "-i", path,
+                "-to", Math.Max(1, (int)introEnd + 2 - seek).ToString(CultureInfo.InvariantCulture),
+                "-af", "silencedetect=noise=-50dB:duration=0.1",
+                "-f", "null",
+                "-"
+            };
 
-            var raw = Encoding.UTF8.GetString(RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false).GetAwaiter().GetResult());
+            var raw = Encoding.UTF8.GetString(
+                await RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false));
             var originalEnd = new TimeRange(introEnd - 15, introEnd);
 
             // Among the silences that intersect the end of the matched intro, pick the one

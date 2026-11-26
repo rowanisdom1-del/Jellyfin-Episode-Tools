@@ -16,6 +16,7 @@ stream for any missing output.
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,26 @@ if not os.path.exists(FFMPEG):
             break
 
 DIALOGUE_RE = re.compile(r"^Dialogue:\s*(.*)$")
+
+# The convert script's Stop path signals this python process, but without a handler its
+# in-flight ffmpeg child would keep reading the source file for up to ten minutes after
+# the stop. Track the child and kill it on TERM/INT; sys.exit() unwinds the try/finally
+# so the temp dir is still cleaned up.
+_child = None
+
+
+def _handle_stop(signum, _frame):
+    proc = _child
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    sys.exit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, _handle_stop)
+signal.signal(signal.SIGINT, _handle_stop)
 OVERRIDE_RE = re.compile(r"\{[^}]*\}")
 MICRO_CUE_S = 0.25      # a cue shorter than this may be a fragment of a bigger one
 MERGE_GAP_S = 0.12      # fragments may be this far apart and still belong together
@@ -354,7 +375,20 @@ def main(argv):
         for k, index in enumerate(indices):
             args += ["-map", f"0:{index}", "-f", "ass",
                      os.path.join(tmpdir, f"in{k}.ass")]
-        subprocess.run(args, capture_output=True, timeout=600)
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        globals()["_child"] = proc
+        try:
+            proc.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        except BaseException:
+            # Includes the SystemExit raised by the TERM/INT handler: never leave the
+            # ffmpeg child behind.
+            proc.kill()
+            raise
+        finally:
+            globals()["_child"] = None
     except Exception as exc:  # never break the conversion over subtitles
         print(f"clean_subs: extraction: {exc}", file=sys.stderr)
 
