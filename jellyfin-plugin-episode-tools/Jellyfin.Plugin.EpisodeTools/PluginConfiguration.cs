@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Xml.Serialization;
 using MediaBrowser.Model.Plugins;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.EpisodeTools;
 
@@ -91,20 +92,30 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<IntroOverride> IntroOverrides { get; set; } = new List<IntroOverride>();
 
     /// <summary>
+    /// Override conflict pairs already reported, so a duplicate rule logs a single warning
+    /// per rule pair instead of one per matching episode.
+    /// </summary>
+    private static readonly HashSet<string> LoggedOverrideConflicts = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Returns the first override that matches this episode, or null. Season and Episode are
     /// optional filters; an empty value matches everything. Episode matches when the file
     /// path contains the given fragment (case-insensitive), so "S01E06" or a full file name
-    /// both work.
+    /// both work. When a logger is supplied, later rules that also match this episode are
+    /// reported once each as conflicts; the first match still wins.
     /// </summary>
-    public IntroOverride? FindIntroOverride(string show, string season, string path)
+    public IntroOverride? FindIntroOverride(string show, string season, string path, ILogger? logger = null)
     {
         if (IntroOverrides is null)
         {
             return null;
         }
 
-        foreach (var ov in IntroOverrides)
+        IntroOverride? matched = null;
+        var matchedIndex = -1;
+        for (var i = 0; i < IntroOverrides.Count; i++)
         {
+            var ov = IntroOverrides[i];
             if (ov is null || ov.Start < 0 || ov.End <= ov.Start)
             {
                 continue;
@@ -128,10 +139,25 @@ public class PluginConfiguration : BasePluginConfiguration
                 continue;
             }
 
-            return ov;
+            if (matched is null)
+            {
+                matched = ov;
+                matchedIndex = i;
+                continue;
+            }
+
+            if (logger is not null && LoggedOverrideConflicts.Add(matchedIndex + ">" + i))
+            {
+                logger.LogWarning(
+                    "[Episode Tools] Intro override skipped: rule #{Index} (show {Show}) overlaps rule #{Matched} for episode {Path}; the first match wins.",
+                    i + 1,
+                    ovShow,
+                    matchedIndex + 1,
+                    path);
+            }
         }
 
-        return null;
+        return matched;
     }
 
     /// <summary>

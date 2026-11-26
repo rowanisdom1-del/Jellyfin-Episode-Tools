@@ -171,21 +171,31 @@ internal static class IntrosRunner
     /// re-parsed when its timestamp or size changes, since this is called per episode while
     /// the media segment task runs and per poll while the dashboard is open.
     /// </summary>
-    public static IReadOnlyList<IntroResult> LoadResults()
+    public static IReadOnlyList<IntroResult> LoadResults() => LoadState().Results;
+
+    /// <summary>
+    /// Loads the latest results and the raw scan settings of the previous run (used by the
+    /// scanner to detect settings changes). The file is only re-parsed when its timestamp or
+    /// size changes, since this is called per episode while the media segment task runs and
+    /// per poll while the dashboard is open. Deleting or corrupting the results file clears
+    /// the cache immediately, so a reset takes effect without a server restart.
+    /// </summary>
+    internal static (IReadOnlyList<IntroResult> Results, IntrosState? State) LoadState()
     {
         try
         {
             var file = ResultsPath;
             if (Plugin.Instance is null || !File.Exists(file))
             {
-                return Array.Empty<IntroResult>();
+                _resultsCache = null;
+                return (Array.Empty<IntroResult>(), null);
             }
 
             var info = new FileInfo(file);
             var key = (Length: info.Length, Modified: info.LastWriteTimeUtc);
             if (_resultsCache is { } cached && cached.Length == key.Length && cached.Modified == key.Modified)
             {
-                return cached.Results;
+                return (cached.Results, cached.State);
             }
 
             var json = File.ReadAllText(file);
@@ -197,23 +207,13 @@ internal static class IntrosRunner
                 });
             IReadOnlyList<IntroResult> results = state?.Intros ?? new List<IntroResult>();
             _resultsCache = (key.Length, key.Modified, results, state);
-            return results;
+            return (results, state);
         }
         catch (Exception)
         {
-            return Array.Empty<IntroResult>();
+            _resultsCache = null;
+            return (Array.Empty<IntroResult>(), null);
         }
-    }
-
-    /// <summary>
-    /// Same as LoadResults but also returns the raw state (scan settings of the previous
-    /// run), used by the scanner to detect settings changes.
-    /// </summary>
-    internal static (IReadOnlyList<IntroResult> Results, IntrosState? State) LoadState()
-    {
-        LoadResults();
-        var cached = _resultsCache;
-        return (cached?.Results ?? Array.Empty<IntroResult>(), cached?.State);
     }
 
     internal sealed class IntrosState
@@ -310,7 +310,7 @@ internal static class IntrosRunner
         var overrideMap = new Dictionary<string, IntroResult>(StringComparer.OrdinalIgnoreCase);
         foreach (var job in jobs)
         {
-            var ov = cfg.FindIntroOverride(job.Show, job.Season, job.Path);
+            var ov = cfg.FindIntroOverride(job.Show, job.Season, job.Path, logger);
             if (ov is not null)
             {
                 overrideMap[job.Path] = new IntroResult

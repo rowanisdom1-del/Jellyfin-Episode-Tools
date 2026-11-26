@@ -1066,7 +1066,9 @@
                         var introMax = parseInt(document.querySelector('#IntroMaxDuration').value, 10);
                         config.IntroMaxDuration = isNaN(introMax) ? 120 : introMax;
                         var overrides = [];
+                        var badRows = [];
                         document.querySelectorAll('#IntroOverrideRows .epOvRow').forEach(function (row) {
+                            row.style.outline = '';
                             var get = function (name) {
                                 var el = row.querySelector('[data-ovf="' + name + '"]');
                                 return el ? el.value.trim() : '';
@@ -1074,7 +1076,13 @@
                             var start = parseFloat(get('start'));
                             var end = parseFloat(get('end'));
                             var show = get('show');
-                            if (!show || isNaN(start) || isNaN(end) || end <= start) { return; }
+                            var blank = !show && !get('season') && !get('episode') && !get('start') && !get('end');
+                            if (blank) { return; }
+                            if (!show || isNaN(start) || isNaN(end) || end <= start) {
+                                row.style.outline = '2px solid #c00';
+                                badRows.push(show || '(row without a show)');
+                                return;
+                            }
                             overrides.push({
                                 Show: show,
                                 Season: get('season'),
@@ -1083,6 +1091,10 @@
                                 End: end
                             });
                         });
+                        if (badRows.length > 0) {
+                            Dashboard.alert('Episode Tools: intro overrides were not saved. Fix the highlighted red rows (' + badRows.join(', ') + ') and save again.');
+                            return;
+                        }
                         config.IntroOverrides = overrides;
                         ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);

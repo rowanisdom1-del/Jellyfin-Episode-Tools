@@ -73,6 +73,20 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
             // Skip when an identical segment from an earlier run is already stored.
             var startTicks = (long)(intro.Start * TimeSpan.TicksPerSecond);
             var endTicks = (long)(intro.End * TimeSpan.TicksPerSecond);
+
+            // Clamp to the file runtime: a mistyped override end must not publish an intro
+            // segment that reaches past the end of the video. Drop inverted/zero-length
+            // windows instead of emitting a broken segment.
+            if (item?.RunTimeTicks is > 0)
+            {
+                endTicks = Math.Min(endTicks, item.RunTimeTicks.Value - 1);
+            }
+
+            if (startTicks >= endTicks)
+            {
+                return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
+            }
+
             foreach (var existing in request.ExistingSegments)
             {
                 if (existing.Type == MediaSegmentType.Intro &&
