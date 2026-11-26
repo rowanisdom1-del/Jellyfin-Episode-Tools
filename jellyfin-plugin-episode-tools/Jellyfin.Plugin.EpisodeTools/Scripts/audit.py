@@ -64,7 +64,7 @@ def main():
     lines = []
     try:
         with open(report_file, "w", encoding="utf-8") as f:
-            f.write(f"RUN\taudit\t{datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}Z\n")
+            f.write(f"RUN\taudit\t{datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}\n")
     except OSError:
         report_file = ""
 

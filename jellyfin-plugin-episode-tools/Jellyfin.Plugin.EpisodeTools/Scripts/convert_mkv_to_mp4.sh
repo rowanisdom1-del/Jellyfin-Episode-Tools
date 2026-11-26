@@ -528,8 +528,9 @@ for src in "${SRC_FILES[@]}"; do
 
   echo
   echo "File: $src"
-  wait_for_playback
 
+  # Cheap skip checks first: during playback there is no point waiting for files
+  # that would be skipped anyway.
   if [[ -e "$out" || -L "$out" ]] && ! $REDO && ! $INPLACE; then
     echo "  Skipping: destination already exists: $out"
     report "$src" "destination already exists: $out"
@@ -893,6 +894,10 @@ fi
     movflags=(-movflags +faststart)
   fi
 
+  # Only now, when the file will actually be converted, wait for the playback
+  # pause flag to clear.
+  wait_for_playback
+
   if [[ -n "$unsafe_audio" ]] && $AUDIO_TO_AAC; then
     echo "  Re-encoding audio to AAC:${unsafe_audio}"
   fi
@@ -901,7 +906,9 @@ fi
       -i "$src" \
       "${CLEANED_INPUTS[@]}" \
       "${maps[@]}" \
-      -map_metadata 0 -map_chapters 0 \
+      # -map_chapters -1: never carry MKV chapter tracks into the MP4 — they become
+      # the bin_data streams that ExoPlayer refuses to play (the 541-file sweep bug).
+      -map_metadata 0 -map_chapters -1 \
       -c copy -c:s mov_text \
       "${audio_args[@]}" \
       "${disp_args[@]}" \
