@@ -644,6 +644,13 @@
                                     </label>
                                     <div class="fieldDescription checkboxFieldDescription">On: the MP4 index is moved to the front of the file, which writes the whole file a second time (safe for progressive web downloads). Off: each file is written once — about twice as fast, half the wear. Jellyfin streams with range requests, so playback works fine without faststart. Turn this off if conversion feels slow.</div>
                                 </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="AutoRepairNewMp4s" name="AutoRepairNewMp4s" type="checkbox" is="emby-checkbox" />
+                                        <span>Auto-repair new MP4s for mobile playback (faststart + hvc1)</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">Off by default. When on, every new .mp4 created by a conversion run is probed after creation and losslessly repaired in place if it would fail Direct Play on Jellyfin Android (index at the end of the file, hev1 tag, data streams) — faststart is also forced for new files while this is on. Hi10P 10-bit video is reported but never "repaired" (that needs a re-encode). Nothing is ever re-encoded; the original quality stays identical.</div>
+                                </div>
                             </div>
 
                             <div class="verticalSection">
@@ -1055,6 +1062,7 @@
                     document.querySelector('#DeleteOriginalsAfterConvert').checked = !!config.DeleteOriginalsAfterConvert;
                     document.querySelector('#ConvertUnusualAudioToAac').checked = !!config.ConvertUnusualAudioToAac;
                     document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
+                    document.querySelector('#AutoRepairNewMp4s').checked = (config.AutoRepairNewMp4s === true || config.AutoRepairNewMp4s === 'true');
                     document.querySelector('#DropSignsSongs').checked = config.DropSignsSongs !== false;
                     document.querySelector('#DropGarbageSubs').checked = config.DropGarbageSubs !== false;
                     document.querySelector('#PauseWhenPlayback').checked = config.PauseWhenPlayback !== false;
@@ -1094,6 +1102,7 @@
                         config.DeleteOriginalsAfterConvert = document.querySelector('#DeleteOriginalsAfterConvert').checked;
                         config.ConvertUnusualAudioToAac = document.querySelector('#ConvertUnusualAudioToAac').checked;
                         config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
+                        config.AutoRepairNewMp4s = document.querySelector('#AutoRepairNewMp4s').checked;
                         config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
                         config.DropGarbageSubs = document.querySelector('#DropGarbageSubs').checked;
                         config.PauseWhenPlayback = document.querySelector('#PauseWhenPlayback').checked;

@@ -28,6 +28,7 @@ DROP_GARBAGE_SUBS=false
 REDO=false
 REMUX=false
 REPAIR=false
+AUTO_REPAIR=false
 MIN_FREE_GB=10
 REPORT_FILE=""
 PREFS_FILE=""
@@ -74,6 +75,10 @@ Options:
                         would fail Direct Play on mobile (MP4 index at the end of the
                         file, HEVC tagged hev1 instead of hvc1, bin_data streams).
                         Files that are already clean are skipped instantly.
+  --auto-repair-mp4    Auto mobile repair for new conversions: faststart is forced for
+                       every newly created .mp4, and after creation each new file is
+                       probed and losslessly remuxed in place if it still would fail
+                       Direct Play on mobile. Hi10P is reported, never re-encoded.
   --min-free-gb N      Require at least N GB free on the destination before converting
                        a file (default 10). Files below the threshold are skipped.
   -h, --help           Show this help.
@@ -95,6 +100,7 @@ while [[ $# -gt 0 ]]; do
     --redo) REDO=true ;;
     --remux-existing) REMUX=true ;;
     --repair-mp4) REPAIR=true ;;
+    --auto-repair-mp4) AUTO_REPAIR=true ;;
     --min-free-gb)
       if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
         echo "--min-free-gb needs a number (see --help)." >&2
@@ -993,7 +999,10 @@ fi
   movflags=()
   # MP4-to-MP4 remuxes (repair / remux-existing) always get faststart: it is the
   # whole point of repairing for mobile, and the file is rewritten anyway.
-  if $FASTSTART || $INPLACE; then
+  # Auto-repair mode forces faststart on brand-new conversions too: the whole point
+  # of the toggle is that no new file can be born without a mobile-friendly index,
+  # even when the faststart config option itself is off.
+  if $FASTSTART || $INPLACE || $AUTO_REPAIR; then
     movflags=(-movflags +faststart)
   fi
 
@@ -1073,6 +1082,62 @@ fi
 
   echo "  Created and verified: $out"
   converted=$((converted + 1))
+
+  # Auto mobile repair (Episode Tools "auto-repair new MP4s"): the brand-new MP4 is
+  # probed exactly like repair mode checks existing files; if it still would fail
+  # Direct Play on mobile (moov at the end, hev1 tag, bin_data), it is losslessly
+  # remuxed in place. Every track is kept, nothing is re-encoded, dispositions are
+  # carried through untouched. Hi10P cannot be fixed losslessly and is only reported.
+  if $AUTO_REPAIR && ! $INPLACE; then
+    mp4_repair_reason "$out"
+    if [[ -n "$REPAIR_REASON" ]]; then
+      if (( REPAIR_BLOCKED )); then
+        echo "  Auto-repair: cannot fix losslessly — $REPAIR_REASON"
+        report "$out" "auto-repair blocked: $REPAIR_REASON"
+      else
+        echo "  Auto-repair: $REPAIR_REASON"
+        rtmp="${out}${PART_SUFFIX}"
+        if probe "$out" && (( VCOUNT + ACOUNT > 0 )); then
+          rmaps=("${VIDEO_MAPS[@]}" "${AUDIO_MAPS[@]}")
+          rsout=0
+          for i in "${SUB_INDICES[@]}"; do
+            rmaps+=("-map" "0:${i}")
+            rslang="${SLANGS[$rsout]:-}"
+            if [[ -n "$rslang" && "$rslang" != "und" ]]; then
+              rmaps+=("-metadata:s:s:$rsout" "language=$rslang")
+            fi
+            rsout=$((rsout + 1))
+          done
+          rtags=()
+          for i in "${!VCODECS[@]}"; do
+            if [[ "${VCODECS[$i]}" == "hevc" ]]; then
+              rtags+=("-tag:v:$i" "hvc1")
+            fi
+          done
+          # Same verify-then-atomic-replace pattern as the main conversion: a failed
+          # repair never damages the file it tried to fix.
+          if "${PRIO[@]}" ffmpeg -nostdin -hide_banner -loglevel warning \
+              -fflags +genpts \
+              -i "$out" \
+              "${rmaps[@]}" \
+              -map_metadata 0 -map_chapters -1 \
+              -c copy \
+              "${rtags[@]}" \
+              -movflags +faststart -f mp4 "$rtmp" \
+            && verify "$VCOUNT" "$ACOUNT" "$SUBCOUNT" "$SRC_DURATION" "$out" "$rtmp" \
+            && mv -fT -- "$rtmp" "$out"; then
+            echo "  Auto-repaired: $out"
+          else
+            echo "  Warning: auto-repair failed; the file is kept exactly as it was."
+            report "$out" "auto-repair failed ($REPAIR_REASON); file kept unchanged"
+            rm -f -- "$rtmp"
+          fi
+        else
+          echo "  Warning: auto-repair could not probe the new MP4; leaving it unchanged."
+        fi
+      fi
+    fi
+  fi
 
   # Never delete in remux mode: there $src is the freshly replaced output.
   if $DELETE && ! $INPLACE; then

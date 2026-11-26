@@ -21,6 +21,37 @@ public class PluginConfiguration : BasePluginConfiguration
         ConvertDirectory = "/mnt/storage/media";
         _deleteOriginalsAfterConvert = "false";
         _convertUnusualAudioToAac = "true";
+        _autoRepairNewMp4s = "false";
+    }
+
+    // Raw serialized value for AutoRepairNewMp4s, same tolerant string pattern as above.
+    private string _autoRepairNewMp4s = "false";
+
+    /// <summary>
+    /// Raw serialized value for AutoRepairNewMp4s. The XML element name is preserved.
+    /// </summary>
+    [XmlElement("AutoRepairNewMp4s")]
+    public string AutoRepairNewMp4sRaw
+    {
+        get => _autoRepairNewMp4s;
+        set => _autoRepairNewMp4s = value ?? "false";
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether new .mp4 files inside the configured show
+    /// folders are automatically queued for lossless mobile repair (faststart + hvc1 tagging,
+    /// no data streams) when they are added to the library. Off by default so existing
+    /// setups opt in safely. Repairs respect the playback guard and never re-encode.
+    /// </summary>
+    [XmlIgnore]
+    public bool AutoRepairNewMp4s
+    {
+        get
+        {
+            var s = (_autoRepairNewMp4s ?? "false").Trim().ToLowerInvariant();
+            return s == "true" || s == "1" || s == "yes" || s == "y" || s == "on";
+        }
+        set => _autoRepairNewMp4s = value ? "true" : "false";
     }
 
     /// <summary>

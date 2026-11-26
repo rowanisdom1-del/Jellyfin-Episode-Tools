@@ -66,7 +66,7 @@ internal static class ScriptRunner
     /// whose .mp4 already exists, replacing it after verification. With <paramref name="folderOverride"/>
     /// only that single folder is scanned (per-show conversion from the Shows tab).
     /// </summary>
-    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null, bool remuxExisting = false, bool repairMp4 = false)
+    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null, bool remuxExisting = false, bool repairMp4 = false, bool autoRepairMp4 = false)
     {
         var cfg = GetConfig();
         var args = new List<string>();
@@ -89,6 +89,12 @@ internal static class ScriptRunner
             {
                 args.Add("--repair-mp4");
                 logger.LogInformation("[Episode Tools] Mobile repair mode: existing .mp4 files are checked for Direct-Play problems (index at the end, hev1 tag, bin_data streams) and repaired losslessly; clean files are skipped instantly.");
+            }
+
+            if (autoRepairMp4 || cfg.AutoRepairNewMp4s)
+            {
+                args.Add("--auto-repair-mp4");
+                logger.LogInformation("[Episode Tools] Auto mobile repair: every new .mp4 created by this run is probed after creation and losslessly repaired in place if it would fail Direct Play on mobile (faststart + hvc1). Already-clean output skips instantly.");
             }
 
             if (cfg.DeleteOriginalsAfterConvert)
