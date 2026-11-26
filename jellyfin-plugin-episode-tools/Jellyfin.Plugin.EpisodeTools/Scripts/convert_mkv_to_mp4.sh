@@ -894,6 +894,17 @@ fi
     movflags=(-movflags +faststart)
   fi
 
+  # HEVC video must be tagged hvc1 in MP4: ffmpeg writes hev1 by default, which
+  # ExoPlayer (Jellyfin Android) cannot Direct Play. -fflags +genpts regenerates
+  # missing/non-monotonic PTS that would otherwise stall stream-copy remuxes at
+  # stream startup on some players.
+  tag_args=()
+  for i in "${!VCODECS[@]}"; do
+    if [[ "${VCODECS[$i]}" == "hevc" ]]; then
+      tag_args+=("-tag:v:$i" "hvc1")
+    fi
+  done
+
   # Only now, when the file will actually be converted, wait for the playback
   # pause flag to clear.
   wait_for_playback
@@ -902,16 +913,21 @@ fi
     echo "  Re-encoding audio to AAC:${unsafe_audio}"
   fi
   echo "  Converting..."
+  # -map_chapters -1: never carry MKV chapter tracks into the MP4 — they become
+  # the bin_data streams that ExoPlayer refuses to play (the 541-file sweep bug).
+  # NOTE: keep that comment here and NOT inside the line-continued command below —
+  # a '#' inside a continued command terminates it early and reorders the arguments
+  # (bash parses the rest of the command as separate programs).
   if ! "${PRIO[@]}" ffmpeg -nostdin -hide_banner -loglevel warning \
+      -fflags +genpts \
       -i "$src" \
       "${CLEANED_INPUTS[@]}" \
       "${maps[@]}" \
-      # -map_chapters -1: never carry MKV chapter tracks into the MP4 — they become
-      # the bin_data streams that ExoPlayer refuses to play (the 541-file sweep bug).
       -map_metadata 0 -map_chapters -1 \
       -c copy -c:s mov_text \
       "${audio_args[@]}" \
       "${disp_args[@]}" \
+      "${tag_args[@]}" \
       "${movflags[@]}" -f mp4 "$tmp"; then
     echo "  Failed: ffmpeg could not create the MP4."
     report "$src" "ffmpeg failed to create the MP4 (see Dashboard > Logs for the ffmpeg error)"

@@ -1419,13 +1419,16 @@ internal static class IntrosRunner
     private static async Task<uint[]?> FingerprintAsync(
         string path, int windowSeconds, ILogger logger, CancellationToken ct)
     {
+        // -map (an output option) must sit AFTER -i: placed before it, ffmpeg parses it
+        // as an option of the episode file and errors with "Option map cannot be
+        // applied to input url", so every fingerprint returned 0 bytes.
         var args = new[]
         {
             "-hide_banner", "-loglevel", "warning",
             "-t", windowSeconds.ToString(CultureInfo.InvariantCulture),
+            "-i", path,
             "-vn", "-sn", "-dn",
             "-map", "0:a:0",
-            "-i", path,
             "-ac", "2",
             "-f", "chromaprint",
             "-fp_format", "raw",
