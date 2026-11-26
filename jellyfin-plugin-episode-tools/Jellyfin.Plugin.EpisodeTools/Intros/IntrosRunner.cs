@@ -692,7 +692,19 @@ internal static class IntrosRunner
                     async (item, token) =>
                     {
                         var b = item.Bound;
-                        var end = await AdjustEndToSilence(item.Job.Path, b.Start, b.End, logger, token).ConfigureAwait(false);
+                        var (end, ambiguous) = await AdjustEndToSilence(item.Job.Path, b.Start, b.End, logger, token).ConfigureAwait(false);
+                        if (end == b.End && ambiguous)
+                        {
+                            // Silence existed near the boundary but further away than the
+                            // snap tolerance (ambiguous fade/cut): try the visual black
+                            // frame refinement before falling back to the raw match.
+                            var visual = await AdjustBoundaryToBlackFrame(item.Job.Path, b.End, logger, token).ConfigureAwait(false);
+                            if (visual is { } v && v - b.Start >= minDuration)
+                            {
+                                end = v;
+                            }
+                        }
+
                         if (end - b.Start < minDuration)
                         {
                             // The snap shrank the intro below the configured minimum (quiet
@@ -1306,7 +1318,25 @@ internal static class IntrosRunner
 
     // ------------------------------------------------------------------ silence snap
 
-    private static async Task<double> AdjustEndToSilence(
+    // A snap may only move a boundary this far from the fingerprinted position: a dramatic
+    // pause inside the OP song used to pull the skip button up to 15s early (mid-song clip).
+    private const double SnapToleranceSeconds = 1.5;
+
+    // Silence near-but-not-at the boundary marks an ambiguous fade/cut; those get a
+    // visual (black frame) refinement instead of an audio snap.
+    private const double AmbiguousWindowSeconds = 8;
+
+    private static readonly Regex BlackFrameRegex = new(
+        @"black_start:(?<start>[0-9.]+)\s*black_end:(?<end>[0-9.]+)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Snaps the end of a matched intro to a silence that sits within ±<see cref="SnapToleranceSeconds"/> of the fingerprinted boundary.
+    /// Returns the (possibly unchanged) boundary plus whether an ambiguous silence (within
+    /// ±<see cref="AmbiguousWindowSeconds"/>) was rejected by the tolerance — the caller can
+    /// then try the visual black-frame refinement.
+    /// </summary>
+    private static async Task<(double Snapped, bool Ambiguous)> AdjustEndToSilence(
         string path, double introStart, double introEnd, ILogger logger, CancellationToken ct)
     {
         try
@@ -1330,13 +1360,14 @@ internal static class IntrosRunner
             var raw = Encoding.UTF8.GetString(
                 await RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false));
             var originalEnd = new TimeRange(introEnd - 15, introEnd);
+            var ambiguousZone = new TimeRange(introEnd - AmbiguousWindowSeconds, introEnd + AmbiguousWindowSeconds);
 
             // Among the silences that intersect the end of the matched intro, pick the one
-            // that starts CLOSEST to the matched end. Taking the first (earliest) silence
-            // instead used to chop intros down to a couple of seconds whenever quiet audio
-            // (a cold open, low-volume dialogue) appears near the start.
+            // that starts CLOSEST to the matched end — but never move the boundary further
+            // than SnapToleranceSeconds: a dramatic pause inside the song must not clip it.
             double bestStart = double.MinValue;
             var found = false;
+            var ambiguous = false;
             double start = double.MinValue, end = double.MinValue;
             var hasStart = false;
             foreach (Match match in SilenceRegex.Matches(raw))
@@ -1352,21 +1383,26 @@ internal static class IntrosRunner
                 {
                     end = time;
                     var candidate = new TimeRange(start, end);
-                    if (originalEnd.Intersects(candidate) &&
-                        candidate.Duration >= 0.33 &&
-                        candidate.Start >= introStart &&
+                    if (candidate.Duration < 0.33 || candidate.Start < introStart)
+                    {
+                        continue;
+                    }
+
+                    if (candidate.Start >= introEnd - SnapToleranceSeconds &&
+                        candidate.Start <= introEnd + SnapToleranceSeconds &&
                         candidate.Start > bestStart)
                     {
                         bestStart = candidate.Start;
                         found = true;
                     }
+                    else if (ambiguousZone.Intersects(candidate))
+                    {
+                        ambiguous = true;
+                    }
                 }
             }
 
-            if (found)
-            {
-                return bestStart;
-            }
+            return (found ? bestStart : introEnd, ambiguous);
         }
         catch (OperationCanceledException)
         {
@@ -1375,17 +1411,86 @@ internal static class IntrosRunner
         catch (Exception ex)
         {
             logger.LogDebug(ex, "[Episode Tools] silence detection failed for \"{Path}\".", path);
+            return (introEnd, false);
+        }
+    }
+
+    /// <summary>
+    /// Visual refinement for ambiguous boundaries: decodes a few seconds of video around
+    /// the boundary and snaps it to the start of a black frame (a fade or a hard cut to
+    /// black), which is exact even when music-over-cut makes silence useless. Returns null
+    /// when no qualifying black frame exists (caller keeps the fingerprinted boundary).
+    /// </summary>
+    private static async Task<double?> AdjustBoundaryToBlackFrame(
+        string path, double boundary, ILogger logger, CancellationToken ct)
+    {
+        try
+        {
+            var seek = Math.Max(0, (int)boundary - 4);
+            var args = new[]
+            {
+                "-hide_banner", "-loglevel", "info",
+                "-ss", seek.ToString(CultureInfo.InvariantCulture),
+                "-i", path,
+                "-t", "8",
+                "-vf", "blackdetect=d=0.06:pic_th=0.98",
+                "-f", "null",
+                "-"
+            };
+
+            var raw = Encoding.UTF8.GetString(
+                await RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false));
+
+            double? best = null;
+            foreach (Match match in BlackFrameRegex.Matches(raw))
+            {
+                var blackStart = Convert.ToDouble(match.Groups["start"].Value, CultureInfo.InvariantCulture) + seek;
+                var blackEnd = Convert.ToDouble(match.Groups["end"].Value, CultureInfo.InvariantCulture) + seek;
+
+                // The boundary sits inside a black frame, or a black frame starts within
+                // tolerance of it: snap to the exact black start (never further away than
+                // the audio snap tolerance).
+                if ((blackStart < boundary && blackEnd > boundary) ||
+                    Math.Abs(blackStart - boundary) <= SnapToleranceSeconds)
+                {
+                    var distance = Math.Abs(blackStart - boundary);
+                    if (best is not { } current || distance < Math.Abs(current - boundary))
+                    {
+                        best = blackStart;
+                    }
+                }
+            }
+
+            if (best is { } snapped)
+            {
+                logger.LogDebug(
+                    "[Episode Tools] boundary for \"{Path}\" refined to a black frame at {Time:0.00}s (was {Boundary:0.00}s).",
+                    path,
+                    snapped,
+                    boundary);
+                return Math.Max(0, snapped);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[Episode Tools] black frame detection failed for \"{Path}\".", path);
         }
 
-        return introEnd;
+        return null;
     }
 
     /// <summary>
     /// Outro counterpart of <see cref="AdjustEndToSilence"/>: snaps the START of a matched
-    /// credits sequence to the silence where the last dialogue ends. Decodes only the
-    /// seconds around the boundary (input seeking rebases output timestamps to 0).
+    /// credits sequence to a silence within ±<see cref="SnapToleranceSeconds"/> of the
+    /// fingerprinted boundary, so a pause before the credits cannot clip the last seconds
+    /// of dialogue. Returns the (possibly unchanged) boundary plus whether an ambiguous
+    /// silence (within ±<see cref="AmbiguousWindowSeconds"/>) was rejected by the tolerance.
     /// </summary>
-    private static async Task<double> AdjustStartToSilence(
+    private static async Task<(double Snapped, bool Ambiguous)> AdjustStartToSilence(
         string path, double outroStart, ILogger logger, CancellationToken ct)
     {
         try
@@ -1405,12 +1510,15 @@ internal static class IntrosRunner
 
             var raw = Encoding.UTF8.GetString(
                 await RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false));
-            var originalStart = new TimeRange(outroStart, outroStart + 15);
+            var ambiguousZone = new TimeRange(outroStart - AmbiguousWindowSeconds, outroStart + AmbiguousWindowSeconds);
 
-            // Among the silences intersecting the start of the matched credits, pick the
-            // one that starts closest to it (dialogue stops, credits begin).
+            // Among the silences near the start of the matched credits, pick the one that
+            // starts closest to it (dialogue stops, credits begin) — bounded like the intro
+            // end snap so mid-credits-music pauses or early dialogue stops cannot move the
+            // boundary meaningfully.
             double bestStart = double.MaxValue;
             var matched = false;
+            var ambiguous = false;
             double start = double.MinValue, end = double.MinValue;
             var hasStart = false;
             foreach (Match match in SilenceRegex.Matches(raw))
@@ -1426,21 +1534,26 @@ internal static class IntrosRunner
                 {
                     end = time;
                     var candidate = new TimeRange(start, end);
-                    if (originalStart.Intersects(candidate) &&
-                        candidate.Duration >= 0.33 &&
-                        candidate.Start >= outroStart - 0.5 &&
+                    if (candidate.Duration < 0.33)
+                    {
+                        continue;
+                    }
+
+                    if (candidate.Start >= outroStart - SnapToleranceSeconds &&
+                        candidate.Start <= outroStart + SnapToleranceSeconds &&
                         candidate.Start < bestStart)
                     {
                         bestStart = candidate.Start;
                         matched = true;
                     }
+                    else if (ambiguousZone.Intersects(candidate))
+                    {
+                        ambiguous = true;
+                    }
                 }
             }
 
-            if (matched)
-            {
-                return Math.Max(0, bestStart);
-            }
+            return (matched ? Math.Max(0, bestStart) : outroStart, ambiguous);
         }
         catch (OperationCanceledException)
         {
@@ -1449,9 +1562,8 @@ internal static class IntrosRunner
         catch (Exception ex)
         {
             logger.LogDebug(ex, "[Episode Tools] outro silence detection failed for \"{Path}\".", path);
+            return (outroStart, false);
         }
-
-        return outroStart;
     }
 
     // ------------------------------------------------------------------ outros (F2)
@@ -1951,7 +2063,18 @@ internal static class IntrosRunner
                     var baseOffset = Math.Max(0, duration - window);
                     var start = baseOffset + b.Start;
                     var end = Math.Min(baseOffset + b.End, Math.Max(duration, start + 1));
-                    var snapped = await AdjustStartToSilence(item.Job.Path, start, logger, token).ConfigureAwait(false);
+                    var (snapped, ambiguous) = await AdjustStartToSilence(item.Job.Path, start, logger, token).ConfigureAwait(false);
+                    if (snapped == start && ambiguous)
+                    {
+                        // Ambiguous silence near the credits start (fade/cut without audio
+                        // change): try the visual black frame refinement.
+                        var visual = await AdjustBoundaryToBlackFrame(item.Job.Path, start, logger, token).ConfigureAwait(false);
+                        if (visual is { } v)
+                        {
+                            snapped = v;
+                        }
+                    }
+
                     if (end - snapped < minDuration)
                     {
                         // The snap shrank the outro below the configured minimum; keep the
