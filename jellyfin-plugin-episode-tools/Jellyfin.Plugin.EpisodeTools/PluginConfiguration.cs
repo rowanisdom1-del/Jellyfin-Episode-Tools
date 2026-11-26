@@ -507,4 +507,60 @@ public class PluginConfiguration : BasePluginConfiguration
         get => int.TryParse(_introMaxDuration, out var n) && n >= 1 ? n : 120;
         set => _introMaxDuration = Math.Clamp(value, 1, 900).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    // Raw serialized value for DetectOutros, same tolerant string pattern as above.
+    private string _detectOutros = "false";
+
+    /// <summary>
+    /// Raw serialized value for DetectOutros. The XML element name is preserved.
+    /// </summary>
+    [XmlElement("DetectOutros")]
+    public string DetectOutrosRaw
+    {
+        get => _detectOutros;
+        set => _detectOutros = value ?? "false";
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the scanner also looks for outros/credits at
+    /// the end of each episode and publishes them as Outro media segments. Off by default
+    /// so existing setups are not surprised by a new skip button.
+    /// This boolean accessor is XmlIgnored and parses many common textual representations.
+    /// </summary>
+    [XmlIgnore]
+    public bool DetectOutros
+    {
+        get
+        {
+            var s = (_detectOutros ?? "false").Trim().ToLowerInvariant();
+            return s == "true" || s == "1" || s == "yes" || s == "y" || s == "on";
+        }
+        set => _detectOutros = value ? "true" : "false";
+    }
+
+    // Raw serialized value for OutroWindowMinutes, same tolerant string pattern as above.
+    private string _outroWindowMinutes = "4";
+
+    /// <summary>
+    /// Raw serialized value for OutroWindowMinutes. The XML element name is preserved.
+    /// </summary>
+    [XmlElement("OutroWindowMinutes")]
+    public string OutroWindowMinutesRaw
+    {
+        get => _outroWindowMinutes;
+        set => _outroWindowMinutes = value ?? "4";
+    }
+
+    /// <summary>
+    /// Gets or sets how many minutes of audio at the end of each episode are fingerprinted
+    /// when scanning for outros/credits (default 4). Credits live at the end; limiting the
+    /// window keeps the scan fast.
+    /// This accessor is XmlIgnored and falls back to the default when the value is not a number.
+    /// </summary>
+    [XmlIgnore]
+    public int OutroWindowMinutes
+    {
+        get => int.TryParse(_outroWindowMinutes, out var n) && n >= 1 ? n : 4;
+        set => _outroWindowMinutes = Math.Clamp(value, 1, 15).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
 }

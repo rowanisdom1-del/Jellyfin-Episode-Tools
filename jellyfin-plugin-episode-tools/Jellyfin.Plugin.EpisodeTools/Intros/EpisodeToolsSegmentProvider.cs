@@ -45,7 +45,7 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
             return ValueTask.FromResult(false);
         }
 
-        return ValueTask.FromResult(IntrosRunner.HasIntro(episode.Path));
+        return ValueTask.FromResult(IntrosRunner.HasAnySegment(episode.Path));
     }
 
     /// <inheritdoc />
@@ -65,7 +65,7 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
 
             var intro = IntrosRunner.LoadResults().FirstOrDefault(i =>
                 string.Equals(i.File, path, StringComparison.OrdinalIgnoreCase));
-            if (intro is null || intro.End - intro.Start < 1)
+            if (intro is null)
             {
                 return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
             }
@@ -82,29 +82,73 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
                 endTicks = Math.Min(endTicks, item.RunTimeTicks.Value - 1);
             }
 
-            if (startTicks >= endTicks)
+            if (startTicks < endTicks)
             {
-                return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
-            }
-
-            foreach (var existing in request.ExistingSegments)
-            {
-                if (existing.Type == MediaSegmentType.Intro &&
-                    Math.Abs(existing.StartTicks - startTicks) < TimeSpan.TicksPerSecond &&
-                    Math.Abs(existing.EndTicks - endTicks) < TimeSpan.TicksPerSecond)
+                var hasIntro = false;
+                foreach (var existing in request.ExistingSegments)
                 {
-                    return Task.FromResult<IReadOnlyList<MediaSegmentDto>>(results);
+                    if (existing.Type == MediaSegmentType.Intro &&
+                        Math.Abs(existing.StartTicks - startTicks) < TimeSpan.TicksPerSecond &&
+                        Math.Abs(existing.EndTicks - endTicks) < TimeSpan.TicksPerSecond)
+                    {
+                        hasIntro = true;
+                        break;
+                    }
+                }
+
+                if (!hasIntro)
+                {
+                    results.Add(new MediaSegmentDto
+                    {
+                        Id = StableId(path, "Intro"),
+                        ItemId = request.ItemId,
+                        Type = MediaSegmentType.Intro,
+                        StartTicks = startTicks,
+                        EndTicks = endTicks
+                    });
                 }
             }
 
-            results.Add(new MediaSegmentDto
+            // Outros/credits (F2): published only while the setting is on, so turning it
+            // off stops new segments without touching stored ones.
+            var detectOutros = (Plugin.Instance?.Configuration?.DetectOutros).GetValueOrDefault(false);
+            if (detectOutros && intro.OutroStart is { } outroStart && intro.OutroEnd is { } outroEnd &&
+                outroEnd - outroStart >= 1)
             {
-                Id = StableId(path),
-                ItemId = request.ItemId,
-                Type = MediaSegmentType.Intro,
-                StartTicks = startTicks,
-                EndTicks = endTicks
-            });
+                var outroStartTicks = (long)(outroStart * TimeSpan.TicksPerSecond);
+                var outroEndTicks = (long)(outroEnd * TimeSpan.TicksPerSecond);
+                if (item?.RunTimeTicks is > 0)
+                {
+                    outroEndTicks = Math.Min(outroEndTicks, item.RunTimeTicks.Value - 1);
+                }
+
+                if (outroStartTicks < outroEndTicks)
+                {
+                    var hasOutro = false;
+                    foreach (var existing in request.ExistingSegments)
+                    {
+                        if (existing.Type == MediaSegmentType.Outro &&
+                            Math.Abs(existing.StartTicks - outroStartTicks) < TimeSpan.TicksPerSecond &&
+                            Math.Abs(existing.EndTicks - outroEndTicks) < TimeSpan.TicksPerSecond)
+                        {
+                            hasOutro = true;
+                            break;
+                        }
+                    }
+
+                    if (!hasOutro)
+                    {
+                        results.Add(new MediaSegmentDto
+                        {
+                            Id = StableId(path, "Outro"),
+                            ItemId = request.ItemId,
+                            Type = MediaSegmentType.Outro,
+                            StartTicks = outroStartTicks,
+                            EndTicks = outroEndTicks
+                        });
+                    }
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -120,9 +164,9 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
         return Task.CompletedTask;
     }
 
-    private static Guid StableId(string path)
+    private static Guid StableId(string path, string kind)
     {
-        var bytes = System.Text.Encoding.UTF8.GetBytes("EpisodeToolsIntro:" + path.ToUpperInvariant());
+        var bytes = System.Text.Encoding.UTF8.GetBytes("EpisodeTools" + kind + ":" + path.ToUpperInvariant());
         return new Guid(System.Security.Cryptography.MD5.HashData(bytes));
     }
 }

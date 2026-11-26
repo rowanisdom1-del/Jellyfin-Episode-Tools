@@ -714,6 +714,18 @@
                                     <input id="IntroMaxDuration" name="IntroMaxDuration" type="number" min="1" max="900" step="1" is="emby-input" />
                                     <div class="fieldDescription">Audio ranges longer than this are ignored (default 120). Raises it for shows with very long openings.</div>
                                 </div>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="DetectOutros" name="DetectOutros" type="checkbox" is="emby-checkbox" />
+                                        <span>Detect outros / credits</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">Off by default. On: a second scan pass fingerprints the last minutes of each episode, matches credits across the season's episodes and publishes them as Outro segments (skip credits buttons). Results appear in the Intros tab.</div>
+                                </div>
+                                <div class="inputContainer">
+                                    <label class="inputLabel inputLabelUnfocused" for="OutroWindowMinutes">Outro window (minutes from end)</label>
+                                    <input id="OutroWindowMinutes" name="OutroWindowMinutes" type="number" min="1" max="15" step="1" is="emby-input" />
+                                    <div class="fieldDescription">How much audio at the end of each episode is fingerprinted for credits (default 4). Raise it only when episodes have very long credits after the last scene.</div>
+                                </div>
                                 <div id="IntroOverrideCard">
                                     <h3 class="sectionTitle">Manual intro overrides</h3>
                                     <div class="epInfoLine">Fixed intro windows for shows where the automatic detection drifts (variable cold opens). Show is required; season (S01) and episode (a file name fragment like S01E06) narrow the match; start and end are seconds. Matched episodes skip detection entirely, so rescans never clobber these values. One show/season row applies the same window to every episode.</div>
@@ -855,12 +867,13 @@
                                             <th>Season</th>
                                             <th style="text-align:left;">Episode file</th>
                                             <th>Intro</th>
+                                            <th>Outro</th>
                                             <th>Length</th>
                                             <th style="text-align:left;">Override</th>
                                         </tr>
                                     </thead>
                                     <tbody id="IntrosBody">
-                                        <tr><td colspan="6">Loading…</td></tr>
+                                        <tr><td colspan="7">Loading…</td></tr>
                                     </tbody>
                                 </table>
                                 <div class="epInfoLine" style="margin-top:1em;">
@@ -1049,6 +1062,8 @@
                     document.querySelector('#IntroParallelism').value = (config.IntroParallelism !== undefined && config.IntroParallelism !== null) ? config.IntroParallelism : 2;
                     document.querySelector('#IntroMinDuration').value = (config.IntroMinDuration !== undefined && config.IntroMinDuration !== null) ? config.IntroMinDuration : 15;
                     document.querySelector('#IntroMaxDuration').value = (config.IntroMaxDuration !== undefined && config.IntroMaxDuration !== null) ? config.IntroMaxDuration : 120;
+                    document.querySelector('#DetectOutros').checked = config.DetectOutros === true;
+                    document.querySelector('#OutroWindowMinutes').value = (config.OutroWindowMinutes !== undefined && config.OutroWindowMinutes !== null) ? config.OutroWindowMinutes : 4;
                     loadOvRows(config);
                     Dashboard.hideLoadingMsg();
                 });
@@ -1091,6 +1106,9 @@
                         config.IntroMinDuration = isNaN(introMin) ? 15 : introMin;
                         var introMax = parseInt(document.querySelector('#IntroMaxDuration').value, 10);
                         config.IntroMaxDuration = isNaN(introMax) ? 120 : introMax;
+                        config.DetectOutros = document.querySelector('#DetectOutros').checked;
+                        var outroWindow = parseInt(document.querySelector('#OutroWindowMinutes').value, 10);
+                        config.OutroWindowMinutes = isNaN(outroWindow) ? 4 : outroWindow;
                         var overrides = [];
                         var badRows = [];
                         document.querySelectorAll('#IntroOverrideRows .epOvRow').forEach(function (row) {
@@ -1873,6 +1891,15 @@
                             tdLen.style.textAlign = 'center';
                             tr.appendChild(tdLen);
 
+                            var tdOutro = document.createElement('td');
+                            if (r.outroStart !== undefined && r.outroStart !== null && r.outroEnd !== undefined && r.outroEnd !== null) {
+                                tdOutro.textContent = fmtClock(r.outroStart) + ' – ' + fmtClock(r.outroEnd);
+                            } else {
+                                tdOutro.textContent = '—';
+                            }
+                            tdOutro.style.textAlign = 'center';
+                            tr.appendChild(tdOutro);
+
                             var tdOv = document.createElement('td');
                             var ovBtn = document.createElement('button');
                             ovBtn.setAttribute('is', 'emby-button');
@@ -1887,11 +1914,11 @@
                             body.appendChild(tr);
                         });
                         if (intros.length === 0) {
-                            body.innerHTML = '<tr><td colspan="6">No intros recorded yet — run a scan.</td></tr>';
+                            body.innerHTML = '<tr><td colspan="7">No intros recorded yet — run a scan.</td></tr>';
                         }
                     }).catch(function () {
                         document.querySelector('#IntrosBody').innerHTML =
-                            '<tr><td colspan="6">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
+                            '<tr><td colspan="7">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
                     });
             }
 
@@ -1927,12 +1954,12 @@
             /* ---------- inline intro override editor (F6) ---------- */
             function startOverrideEdit(r, tr) {
                 var tds = tr.querySelectorAll('td');
-                if (tds.length < 6 || tr.dataset.editing === '1') { return; }
+                if (tds.length < 7 || tr.dataset.editing === '1') { return; }
                 tr.dataset.editing = '1';
 
                 var tdIntro = tds[3];
                 var tdLen = tds[4];
-                var tdAct = tds[5];
+                var tdAct = tds[6];
                 tdIntro.innerHTML = '';
                 tdLen.innerHTML = '';
                 tdAct.innerHTML = '';

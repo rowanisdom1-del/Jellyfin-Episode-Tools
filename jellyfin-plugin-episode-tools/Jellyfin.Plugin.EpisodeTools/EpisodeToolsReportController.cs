@@ -1049,7 +1049,9 @@ public class EpisodeToolsReportController : ControllerBase
                 season = r.Season,
                 file = r.File,
                 start = r.Start,
-                end = r.End
+                end = r.End,
+                outroStart = r.OutroStart,
+                outroEnd = r.OutroEnd
             })
         };
 

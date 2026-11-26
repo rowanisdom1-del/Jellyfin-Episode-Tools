@@ -35,6 +35,12 @@ public sealed class IntroResult
 
     /// <summary>Gets or sets the intro end (seconds).</summary>
     public double End { get; set; }
+
+    /// <summary>Gets or sets the detected outro/credits start (seconds), or null when none.</summary>
+    public double? OutroStart { get; set; }
+
+    /// <summary>Gets or sets the detected outro/credits end (seconds), or null when none.</summary>
+    public double? OutroEnd { get; set; }
 }
 
 /// <summary>
@@ -158,6 +164,26 @@ internal static class IntrosRunner
         foreach (var intro in results)
         {
             if (string.Equals(intro.File, path, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// True when the results file holds a usable intro or outro (one second or longer) for
+    /// exactly this path — used by the media segment provider to decide whether to run.
+    /// </summary>
+    public static bool HasAnySegment(string path)
+    {
+        var results = LoadResults();
+        foreach (var intro in results)
+        {
+            if (string.Equals(intro.File, path, StringComparison.OrdinalIgnoreCase) &&
+                (intro.End - intro.Start >= 1 ||
+                 (intro.OutroStart is { } outroStart && intro.OutroEnd is { } outroEnd && outroEnd - outroStart >= 1)))
             {
                 return true;
             }
@@ -589,6 +615,14 @@ internal static class IntrosRunner
         SaveCacheIndex(cacheDir, liveCacheFiles);
         PruneCache(cacheDir, liveCacheFiles);
 
+        // Outros/credits (optional, off by default): a second pass over the same season
+        // groups, fingerprinting the last minutes of each file and matching those.
+        if (cfg.DetectOutros)
+        {
+            await ScanOutrosAsync(cfg, jobs, seasons, cacheDir, minDuration, maxDuration, found, WriteState, logger, ct)
+                .ConfigureAwait(false);
+        }
+
         var results2 = found.Values.OrderBy(r => r.Show, StringComparer.OrdinalIgnoreCase).ToList();
         _lastMessage = $"finished: {results2.Count} intro(s) in {jobs.Count} episode(s)";
         _lastProgress = 100;
@@ -694,10 +728,15 @@ internal static class IntrosRunner
 
     // ------------------------------------------------------------------ fingerprinting
 
-    private static string CacheFileFor(string cacheDir, string path, int window)
+    private static string CacheFileFor(string cacheDir, string path, int window, string kind = "")
     {
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            path + "|" + window.ToString(CultureInfo.InvariantCulture))));
+        // Intros keep the original key so existing caches stay valid; outros get their own
+        // key space (separate suffix), and the window is part of the key either way, so a
+        // window change naturally invalidates the affected entries.
+        var key = kind.Length == 0
+            ? path + "|" + window.ToString(CultureInfo.InvariantCulture)
+            : kind + "|" + path + "|" + window.ToString(CultureInfo.InvariantCulture);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
         return Path.Combine(cacheDir, hash + ".json");
     }
 
@@ -1189,6 +1228,470 @@ internal static class IntrosRunner
         }
 
         return introEnd;
+    }
+
+    /// <summary>
+    /// Outro counterpart of <see cref="AdjustEndToSilence"/>: snaps the START of a matched
+    /// credits sequence to the silence where the last dialogue ends. Decodes only the
+    /// seconds around the boundary (input seeking rebases output timestamps to 0).
+    /// </summary>
+    private static async Task<double> AdjustStartToSilence(
+        string path, double outroStart, ILogger logger, CancellationToken ct)
+    {
+        try
+        {
+            var seek = Math.Max(0, (int)outroStart - 2);
+            var args = new[]
+            {
+                "-hide_banner", "-loglevel", "info",
+                "-vn", "-sn", "-dn",
+                "-ss", seek.ToString(CultureInfo.InvariantCulture),
+                "-i", path,
+                "-to", Math.Max(1, (int)outroStart + 17 - seek).ToString(CultureInfo.InvariantCulture),
+                "-af", "silencedetect=noise=-50dB:duration=0.1",
+                "-f", "null",
+                "-"
+            };
+
+            var raw = Encoding.UTF8.GetString(
+                await RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false));
+            var originalStart = new TimeRange(outroStart, outroStart + 15);
+
+            // Among the silences intersecting the start of the matched credits, pick the
+            // one that starts closest to it (dialogue stops, credits begin).
+            double bestStart = double.MaxValue;
+            var matched = false;
+            double start = double.MinValue, end = double.MinValue;
+            var hasStart = false;
+            foreach (Match match in SilenceRegex.Matches(raw))
+            {
+                var isStart = match.Groups["type"].Value == "start";
+                var time = Convert.ToDouble(match.Groups["time"].Value, CultureInfo.InvariantCulture) + seek;
+                if (isStart)
+                {
+                    start = time;
+                    hasStart = true;
+                }
+                else if (hasStart)
+                {
+                    end = time;
+                    var candidate = new TimeRange(start, end);
+                    if (originalStart.Intersects(candidate) &&
+                        candidate.Duration >= 0.33 &&
+                        candidate.Start >= outroStart - 0.5 &&
+                        candidate.Start < bestStart)
+                    {
+                        bestStart = candidate.Start;
+                        matched = true;
+                    }
+                }
+            }
+
+            if (matched)
+            {
+                return Math.Max(0, bestStart);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "[Episode Tools] outro silence detection failed for \"{Path}\".", path);
+        }
+
+        return outroStart;
+    }
+
+    // ------------------------------------------------------------------ outros (F2)
+
+    private static string OutroCacheFileFor(string cacheDir, string path, int window) =>
+        CacheFileFor(cacheDir, path, window, "outro");
+
+    private static bool TryLoadCachedOutro(
+        string cacheDir, string path, int window, out (uint[] Points, double Duration) cached)
+    {
+        cached = (Array.Empty<uint>(), 0);
+        try
+        {
+            var cacheFile = OutroCacheFileFor(cacheDir, path, window);
+            if (!File.Exists(cacheFile))
+            {
+                return false;
+            }
+
+            var info = new FileInfo(path);
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cacheFile));
+            var root = doc.RootElement;
+            var size = root.GetProperty("size").GetInt64();
+            var mtime = root.GetProperty("mtime").GetDouble();
+            if (size != info.Length ||
+                Math.Abs(mtime - info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds) > 2)
+            {
+                return false;
+            }
+
+            var b64 = root.GetProperty("points").GetString() ?? string.Empty;
+            var raw = Convert.FromBase64String(b64);
+            var points = new uint[raw.Length / 4];
+            for (var i = 0; i < points.Length; i++)
+            {
+                points[i] = BitConverter.ToUInt32(raw, i * 4);
+            }
+
+            if (points.Length == 0)
+            {
+                return false;
+            }
+
+            var duration = root.TryGetProperty("duration", out var d) ? d.GetDouble() : 0;
+            if (duration <= 0)
+            {
+                return false;
+            }
+
+            cached = (points, duration);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static void SaveCachedOutro(
+        string cacheDir, Job job, int window, uint[] points, double duration)
+    {
+        try
+        {
+            var info = new FileInfo(job.Path);
+            var bytes = new byte[points.Length * 4];
+            for (var i = 0; i < points.Length; i++)
+            {
+                BitConverter.GetBytes(points[i]).CopyTo(bytes, i * 4);
+            }
+
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = job.Path,
+                size = info.Length,
+                mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds,
+                duration,
+                points = Convert.ToBase64String(bytes)
+            });
+            File.WriteAllText(OutroCacheFileFor(cacheDir, job.Path, window), payload);
+        }
+        catch (Exception)
+        {
+            // Caching is best effort.
+        }
+    }
+
+    private static string FfprobePath()
+    {
+        var env = Environment.GetEnvironmentVariable("JELLYFIN_FFMPEG");
+        foreach (var candidate in new[]
+                 {
+                     string.IsNullOrEmpty(env) ? null : Path.Combine(Path.GetDirectoryName(env) ?? ".", "ffprobe"),
+                     "/usr/lib/jellyfin-ffmpeg/ffprobe",
+                     "/usr/bin/ffprobe",
+                     "/usr/local/bin/ffprobe",
+                     "ffprobe"
+                 })
+        {
+            if (string.IsNullOrEmpty(candidate))
+            {
+                continue;
+            }
+
+            if (!candidate.Contains(Path.DirectorySeparatorChar) || File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "ffprobe";
+    }
+
+    private static async Task<double> ProbeDurationAsync(string path, ILogger logger, CancellationToken ct)
+    {
+        var args = new[]
+        {
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            path
+        };
+
+        var raw = Encoding.UTF8.GetString(
+            await RunProcessAsync(FfprobePath(), args, false, logger, ct).ConfigureAwait(false));
+        return double.TryParse(raw.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration)
+            ? duration
+            : 0;
+    }
+
+    /// <summary>
+    /// Fingerprints the last <paramref name="windowSeconds"/> seconds of an episode
+    /// (outro/credits live at the end). Returns the points plus the file duration, which
+    /// converts relative point indices into absolute seconds.
+    /// </summary>
+    private static async Task<(uint[] Points, double Duration)?> FingerprintOutroAsync(
+        string path, int windowSeconds, ILogger logger, CancellationToken ct)
+    {
+        try
+        {
+            var duration = await ProbeDurationAsync(path, logger, ct).ConfigureAwait(false);
+            if (duration <= 0)
+            {
+                logger.LogWarning(
+                    "[Episode Tools] could not read the duration of \"{Path}\"; skipping its outro fingerprint.",
+                    path);
+                return null;
+            }
+
+            var args = new[]
+            {
+                "-hide_banner", "-loglevel", "warning",
+                "-sseof", "-" + windowSeconds.ToString(CultureInfo.InvariantCulture),
+                "-i", path,
+                "-t", windowSeconds.ToString(CultureInfo.InvariantCulture),
+                "-ac", "2",
+                "-f", "chromaprint",
+                "-fp_format", "raw",
+                "-"
+            };
+
+            var raw = await RunProcessAsync(FfmpegPath(), args, false, logger, ct).ConfigureAwait(false);
+            if (raw.Length == 0 || raw.Length % 4 != 0)
+            {
+                logger.LogWarning(
+                    "[Episode Tools] chromaprint returned {Count} bytes for the outro of \"{Path}\".",
+                    raw.Length,
+                    path);
+                return null;
+            }
+
+            var points = new uint[raw.Length / 4];
+            for (var i = 0; i < points.Length; i++)
+            {
+                points[i] = BitConverter.ToUInt32(raw, i * 4);
+            }
+
+            return points.Length > 0 ? (points, duration) : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] outro fingerprinting failed for \"{Path}\".", path);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Second scan pass for outros/credits: fingerprints the last minutes of every episode
+    /// (separate cache), pairs them per season with the same inverted-index matching, then
+    /// snaps the matched start to silence. Results are written into the shared
+    /// <see cref="IntroResult"/> entries as OutroStart/OutroEnd.
+    /// </summary>
+    private static async Task ScanOutrosAsync(
+        PluginConfiguration cfg,
+        List<Job> jobs,
+        List<IGrouping<string, Job>> seasons,
+        string introCacheDir,
+        int minDuration,
+        int maxDuration,
+        Dictionary<string, IntroResult> found,
+        Action writeState,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var window = Math.Clamp(cfg.OutroWindowMinutes, 1, 15) * 60;
+        var parallelism = Math.Clamp(cfg.IntroParallelism, 1, 8);
+        var cacheDir = Path.Combine(introCacheDir, "outros");
+        Directory.CreateDirectory(cacheDir);
+
+        logger.LogInformation(
+            "[Episode Tools] Outro scan: {Jobs} episode(s), last {Minutes} minute(s) of each.",
+            jobs.Count,
+            window / 60);
+
+        var points = new Dictionary<string, (uint[] Points, double Duration)>(StringComparer.OrdinalIgnoreCase);
+        var missing = new List<Job>();
+        foreach (var job in jobs)
+        {
+            if (TryLoadCachedOutro(cacheDir, job.Path, window, out var cached))
+            {
+                points[job.Path] = cached;
+            }
+            else
+            {
+                missing.Add(job);
+            }
+        }
+
+        var totalMissing = missing.Count;
+        var done = 0;
+        if (totalMissing > 0)
+        {
+            _lastMessage = $"outro fingerprinting 0/{totalMissing} episode(s)";
+            await Parallel.ForEachAsync(
+                missing,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = parallelism,
+                    CancellationToken = ct
+                },
+                async (job, token) =>
+                {
+                    var res = await FingerprintOutroAsync(job.Path, window, logger, token).ConfigureAwait(false);
+                    if (res is { } r)
+                    {
+                        points[job.Path] = r;
+                        SaveCachedOutro(cacheDir, job, window, r.Points, r.Duration);
+                    }
+
+                    var count = Interlocked.Increment(ref done);
+                    _lastProgress = 100.0 * count / Math.Max(1, totalMissing);
+                    _lastMessage = $"outro fingerprinting {count}/{totalMissing} episode(s)";
+                }).ConfigureAwait(false);
+        }
+
+        var groups = seasons.Where(s => s.Count() >= 2).ToList();
+        var seasonIndex = 0;
+        foreach (var season in groups)
+        {
+            seasonIndex++;
+            ct.ThrowIfCancellationRequested();
+            await PlaybackGuard.WaitWhilePlaybackActiveAsync(logger, ct).ConfigureAwait(false);
+
+            var queue = season.Where(j => points.ContainsKey(j.Path)).ToList();
+            if (queue.Count < 2)
+            {
+                continue;
+            }
+
+            _lastMessage = $"outro matching season {seasonIndex}/{groups.Count} ({queue.Count} episode(s))";
+
+            var bounds = new Dictionary<string, (double Start, double End)>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < queue.Count; i++)
+            {
+                for (var k = i + 1; k < queue.Count; k++)
+                {
+                    var match = CompareEpisodes(queue[i].Points!, queue[k].Points!, minDuration, maxDuration);
+                    if (match is null)
+                    {
+                        continue;
+                    }
+
+                    SaveBetter(bounds, queue[i].Path, match.Value.Item1, match.Value.Item2);
+                    SaveBetter(bounds, queue[k].Path, match.Value.Item1, match.Value.Item2);
+                }
+            }
+
+            // A match that disappeared must disappear from the results too: clear this
+            // season's stored outros before writing the fresh ones.
+            foreach (var job in season)
+            {
+                if (found.TryGetValue(job.Path, out var entry) &&
+                    (entry.OutroStart is not null || entry.OutroEnd is not null))
+                {
+                    found[job.Path] = new IntroResult
+                    {
+                        File = entry.File,
+                        Show = entry.Show,
+                        Season = entry.Season,
+                        Start = entry.Start,
+                        End = entry.End
+                    };
+                }
+            }
+
+            var toSnap = queue
+                .Where(j => bounds.ContainsKey(j.Path))
+                .Select(j => (Job: j, Bound: bounds[j.Path]))
+                .ToList();
+            if (toSnap.Count == 0)
+            {
+                writeState();
+                continue;
+            }
+
+            _lastMessage = $"outro snapping {toSnap.Count} credit(s) (season {seasonIndex}/{groups.Count})";
+            var matched = new ConcurrentDictionary<string, (Job Job, double Start, double End)>(StringComparer.OrdinalIgnoreCase);
+
+            await Parallel.ForEachAsync(
+                toSnap,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = parallelism,
+                    CancellationToken = ct
+                },
+                async (item, token) =>
+                {
+                    var b = item.Bound;
+                    var duration = points[item.Job.Path].Duration;
+                    var baseOffset = Math.Max(0, duration - window);
+                    var start = baseOffset + b.Start;
+                    var end = Math.Min(baseOffset + b.End, Math.Max(duration, start + 1));
+                    var snapped = await AdjustStartToSilence(item.Job.Path, start, logger, token).ConfigureAwait(false);
+                    if (end - snapped < minDuration)
+                    {
+                        // The snap shrank the outro below the configured minimum; keep the
+                        // fingerprinted start instead.
+                        snapped = start;
+                    }
+
+                    matched[item.Job.Path] = (item.Job, snapped, end);
+                }).ConfigureAwait(false);
+
+            foreach (var kvp in matched)
+            {
+                var job = kvp.Value.Job;
+                var baseResult = found.TryGetValue(job.Path, out var existing)
+                    ? existing
+                    : new IntroResult { File = job.Path, Show = job.Show, Season = job.Season };
+                found[job.Path] = new IntroResult
+                {
+                    File = job.Path,
+                    Show = job.Show,
+                    Season = job.Season,
+                    Start = baseResult.Start,
+                    End = baseResult.End,
+                    OutroStart = Math.Round(kvp.Value.Start, 2),
+                    OutroEnd = Math.Round(kvp.Value.End, 2)
+                };
+            }
+
+            writeState();
+            logger.LogInformation(
+                "[Episode Tools] Outro scan: season {Index}/{Total} done; {Count} outro(s) so far.",
+                seasonIndex,
+                groups.Count,
+                found.Values.Count(r => r.OutroStart is not null));
+        }
+
+        // Prune the outro cache with its own index (it lives in a subfolder, so the intro
+        // prune above never touches it).
+        var liveOutroCacheFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var job in jobs)
+        {
+            if (points.ContainsKey(job.Path))
+            {
+                liveOutroCacheFiles.Add(Path.GetFileName(OutroCacheFileFor(cacheDir, job.Path, window)));
+            }
+        }
+
+        SaveCacheIndex(cacheDir, liveOutroCacheFiles);
+        PruneCache(cacheDir, liveOutroCacheFiles);
+
+        var outroCount = found.Values.Count(r => r.OutroStart is not null);
+        logger.LogInformation(
+            "[Episode Tools] Outro scan finished: {Count} outro(s) detected.",
+            outroCount);
     }
 
     /// <summary>Range of contiguous time.</summary>
