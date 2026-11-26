@@ -832,7 +832,8 @@
                                 </table>
                                 <div class="epInfoLine" style="margin-top:1em;">
                                     Fix options: the <b>Fix Default</b> button repairs the default flag losslessly without re-encoding;
-                                    enable <b>Drop signs/songs subtitle tracks</b> in Settings and run
+                                    the <b>Repair for mobile</b> button makes an .mp4 Direct-Play friendly for Jellyfin Android (faststart + hvc1, lossless); or run the
+                                    <b>9. Repair MP4s for mobile playback</b> scheduled task for the whole library; enable <b>Drop signs/songs subtitle tracks</b> in Settings and run
                                     <b>6. Re-convert MKV to MP4 (replaces existing .mp4)</b> to drop the track entirely; or set per-show subtitle/audio
                                     defaults on the Shows tab and re-convert.
                                 </div>
@@ -1470,7 +1471,7 @@
                 for (var i = 0; i < lines.length; i++) {
                     var cols = lines[i].split('\t');
                     if (cols[0] === 'RUN') { mode = cols[1] || ''; date = cols[2] || ''; continue; }
-                    if (cols[0] !== 'SUBWARN' && cols[0] !== 'SUBOK' && cols[0] !== 'SUBINFO' && cols[0] !== 'SUBFIX') continue;
+                    if (cols[0] !== 'SUBWARN' && cols[0] !== 'SUBOK' && cols[0] !== 'SUBINFO' && cols[0] !== 'SUBFIX' && cols[0] !== 'MOBILE') continue;
                     var p = cols[1] || '';
                     if (!byPath[p]) { byPath[p] = []; order.push(p); }
                     byPath[p].push({ kind: cols[0], msg: cols.slice(2).join(' ') });
@@ -1478,7 +1479,7 @@
 
                 order.forEach(function (p) {
                     var findings = byPath[p];
-                    var hasWarn = findings.some(function (f) { return f.kind === 'SUBWARN'; });
+                    var hasWarn = findings.some(function (f) { return f.kind === 'SUBWARN' || f.kind === 'MOBILE' || f.kind === 'SUBFIX'; });
                     if (hasWarn) warns++; else if (findings.some(function (f) { return f.kind === 'SUBOK'; })) oks++;
 
                     var tr = document.createElement('tr');
@@ -1491,12 +1492,14 @@
                     var tdMsg = document.createElement('td');
                     findings.forEach(function (f) {
                         var fix = f.kind === 'SUBFIX' ? parseSubFix(f.msg) : null;
+                        var mobRepair = f.kind === 'MOBILE' && / \| repair$/.test(f.msg);
                         var div = document.createElement('div');
                         div.style.wordBreak = 'break-all';
-                        div.textContent = (f.kind === 'SUBWARN' ? '⚠ ' : f.kind === 'SUBFIX' ? '⤓ ' : f.kind === 'SUBOK' ? '✓ ' : '· ')
-                            + (f.kind === 'SUBFIX' ? f.msg.split(' | ')[0] : f.msg);
+                        div.textContent = (f.kind === 'SUBWARN' ? '⚠ ' : f.kind === 'SUBFIX' ? '⤓ ' : f.kind === 'MOBILE' ? '📱 ' : f.kind === 'SUBOK' ? '✓ ' : '· ')
+                            + ((f.kind === 'SUBFIX' || f.kind === 'MOBILE') ? f.msg.split(' | ')[0] : f.msg);
                         if (f.kind === 'SUBWARN') { div.style.color = '#c33'; }
                         if (f.kind === 'SUBFIX') { div.style.color = '#2e8b57'; }
+                        if (f.kind === 'MOBILE') { div.style.color = '#d78a00'; }
                         if (f.kind === 'SUBINFO') { div.style.opacity = '0.7'; }
                         tdMsg.appendChild(div);
                         if (fix) {
@@ -1508,6 +1511,16 @@
                             fbtn.title = 'Rewrite the default subtitle flag losslessly: mkvpropedit for .mkv, verified stream-copy remux for .mp4 (original archived in the plugin trash)';
                             fbtn.addEventListener('click', function () { fixDefaultTrack(p, fix, fbtn); });
                             tdMsg.appendChild(fbtn);
+                        }
+                        if (mobRepair) {
+                            var mbtn = document.createElement('button');
+                            mbtn.setAttribute('is', 'emby-button');
+                            mbtn.setAttribute('type', 'button');
+                            mbtn.className = 'raised button-mini emby-button';
+                            mbtn.textContent = 'Repair for mobile';
+                            mbtn.title = 'Lossless stream-copy remux: faststart (index moved to the front), HEVC re-tagged hvc1, data streams dropped — no re-encoding, original archived in the plugin trash';
+                            mbtn.addEventListener('click', function () { repairMp4(p, mbtn); });
+                            tdMsg.appendChild(mbtn);
                         }
                     });
                     tr.appendChild(tdMsg);
@@ -1568,6 +1581,29 @@
                     btn.disabled = false;
                     btn.textContent = 'Fix Default';
                     Dashboard.alert('Episode Tools: fixing the default track failed — see Dashboard > Logs.');
+                });
+            }
+
+            /* ---------- one-click mobile Direct-Play repair (F6) ---------- */
+            function repairMp4(path, btn) {
+                if (!window.confirm('Repair this MP4 for mobile playback now?\n\nLossless stream-copy remux: the index (moov) moves to the front of the file (faststart), HEVC is re-tagged hvc1, data streams (bin_data) are dropped. No re-encoding, no quality change. The original is archived in the plugin trash.\n\nRun the subtitle check again afterwards to refresh this report.')) {
+                    return;
+                }
+                btn.disabled = true;
+                btn.textContent = '…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('EpisodeTools/RepairMp4'),
+                    dataType: 'text',
+                    data: JSON.stringify({ path: path }),
+                    contentType: 'application/json'
+                }).then(function (text) {
+                    btn.textContent = 'Done ✓';
+                    Dashboard.alert('Episode Tools: ' + (text || 'repaired') + '. Run the subtitle check again to refresh this report.');
+                }).catch(function () {
+                    btn.disabled = false;
+                    btn.textContent = 'Repair for mobile';
+                    Dashboard.alert('Episode Tools: the mobile repair failed — see Dashboard > Logs.');
                 });
             }
 

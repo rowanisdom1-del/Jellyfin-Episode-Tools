@@ -66,7 +66,7 @@ internal static class ScriptRunner
     /// whose .mp4 already exists, replacing it after verification. With <paramref name="folderOverride"/>
     /// only that single folder is scanned (per-show conversion from the Shows tab).
     /// </summary>
-    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null, bool remuxExisting = false)
+    public static Task RunConvertAsync(ILogger logger, bool apply, IProgress<double> progress, CancellationToken cancellationToken, bool redo = false, string? folderOverride = null, bool remuxExisting = false, bool repairMp4 = false)
     {
         var cfg = GetConfig();
         var args = new List<string>();
@@ -83,6 +83,12 @@ internal static class ScriptRunner
             {
                 args.Add("--remux-existing");
                 logger.LogInformation("[Episode Tools] Re-muxing existing .mp4 files that have no .mkv source (settings re-applied, subtitles cleaned, replaced after verification).");
+            }
+
+            if (repairMp4)
+            {
+                args.Add("--repair-mp4");
+                logger.LogInformation("[Episode Tools] Mobile repair mode: existing .mp4 files are checked for Direct-Play problems (index at the end, hev1 tag, bin_data streams) and repaired losslessly; clean files are skipped instantly.");
             }
 
             if (cfg.DeleteOriginalsAfterConvert)

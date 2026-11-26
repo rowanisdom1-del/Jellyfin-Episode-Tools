@@ -277,3 +277,48 @@ public sealed class ConvertRedoTask : IScheduledTask
         return Array.Empty<TaskTriggerInfo>();
     }
 }
+
+/// <summary>
+/// Repairs existing MP4 files that would fail Direct Play on mobile clients
+/// (Jellyfin Android / ExoPlayer): lossless stream-copy re-mux with faststart,
+/// hvc1 tagging and no data streams. No re-encoding, clean files skip instantly.
+/// </summary>
+public sealed class RepairMp4Task : IScheduledTask
+{
+    private readonly ILogger<RepairMp4Task> _logger;
+
+    /// <summary>Initializes a new instance of the <see cref="RepairMp4Task"/> class.</summary>
+    /// <param name="logger">Logger.</param>
+    /// <param name="sessionManager">Jellyfin sessions, for the playback guard.</param>
+    /// <param name="taskManager">Jellyfin's task manager, for the post-repair library scan.</param>
+    public RepairMp4Task(ILogger<RepairMp4Task> logger, ISessionManager sessionManager, ITaskManager taskManager)
+    {
+        _logger = logger;
+        PlaybackGuard.Configure(sessionManager);
+        ScriptRunner.ConfigureTaskManager(taskManager);
+    }
+
+    /// <inheritdoc />
+    public string Name => "9. Repair MP4s for mobile playback (lossless)";
+
+    /// <inheritdoc />
+    public string Key => "EpisodeToolsRepairMp4";
+
+    /// <inheritdoc />
+    public string Description => "Checks every .mp4 for mobile Direct-Play problems — the MP4 index (moov) at the end of the file (endless spinner on Android), HEVC tagged hev1 instead of hvc1, and bin_data streams — and repairs them with a lossless stream-copy re-mux (faststart + hvc1, no re-encoding). Already-clean files are skipped instantly; 10-bit H.264 (Hi10P) is reported as not repairable.";
+
+    /// <inheritdoc />
+    public string Category => "Episode Tools";
+
+    /// <inheritdoc />
+    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    {
+        return ScriptRunner.RunConvertAsync(_logger, true, progress, cancellationToken, repairMp4: true);
+    }
+
+    /// <inheritdoc />
+    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
+    {
+        return Array.Empty<TaskTriggerInfo>();
+    }
+}

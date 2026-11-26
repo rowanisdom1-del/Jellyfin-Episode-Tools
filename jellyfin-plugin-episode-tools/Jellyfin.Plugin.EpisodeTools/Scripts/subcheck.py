@@ -25,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -73,6 +74,119 @@ def ffprobe_streams(path, ffprobe):
             "default": bool((stream.get("disposition") or {}).get("default")),
         })
     return result
+
+
+def ffprobe_media_streams(path, ffprobe):
+    """Every stream with codec/tag/pixel-format info, for the mobile Direct-Play checks.
+    Separate from ffprobe_streams (subtitle-only, richer tag parsing) on purpose: the
+    mobile check costs one extra cheap ffprobe per uncached file."""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error",
+             "-show_entries",
+             "stream=index,codec_name,codec_type,codec_tag_string,pix_fmt",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=60, check=True).stdout
+        data = json.loads(out)
+    except Exception:
+        return []
+    return data.get("streams", []) or []
+
+
+def mp4_moov_first(path):
+    """True when the file's moov index sits before its mdat (faststart), False when
+    it does not, None when the scan fails or the file is not an MP4 box structure."""
+    try:
+        with open(path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            pos = 0
+            moov = mdat = None
+            while pos + 8 <= size:
+                f.seek(pos)
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    break
+                ln = struct.unpack(">I", hdr[:4])[0]
+                typ = hdr[4:8].decode("latin1")
+                if ln == 1:
+                    ln = struct.unpack(">Q", f.read(8))[0]
+                elif ln == 0:
+                    ln = size - pos
+                elif ln < 8:
+                    return None
+                if typ == "moov" and moov is None:
+                    moov = pos
+                elif typ == "mdat" and mdat is None:
+                    mdat = pos
+                pos += ln
+            if moov is None:
+                return None
+            return mdat is None or moov < mdat
+    except OSError:
+        return None
+
+
+MOBILE_AUDIO_CODECS = {"ac3", "eac3", "dts", "truehd"}
+TEXT_SUB_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "tx3g"}
+
+
+def check_mobile(path, streams, files, emit, rep):
+    """Mobile Direct-Play compatibility findings (Jellyfin Android / ExoPlayer).
+    Messages that a lossless repair can fix end with ' | repair' (the dashboard
+    shows a one-click Repair button for those). Returns the problem count."""
+    problems = 0
+    is_mp4 = os.path.splitext(path)[1].lower() in (".mp4", ".m4v")
+    video = [s for s in streams if s.get("codec_type") == "video"]
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+    subs = [s for s in streams if s.get("codec_type") == "subtitle"]
+
+    def warn(msg, repairable=False):
+        nonlocal problems
+        full = msg + (" | repair" if repairable else "")
+        emit(f"  !! {msg}")
+        rep("MOBILE", full)
+        problems += 1
+
+    for s in video:
+        codec = s.get("codec_name") or ""
+        if codec == "h264" and (s.get("pix_fmt") or "") == "yuv420p10le":
+            warn("video is 10-bit H.264 (Hi10P): no phone hardware-decodes it, so every "
+                 "view forces a full software transcode that a Raspberry Pi cannot keep "
+                 "up with. Only a re-encode fixes this (not repairable losslessly).")
+        if is_mp4 and codec == "hevc":
+            tag = (s.get("codec_tag_string") or "").strip("\x00 ")
+            if tag and tag != "hvc1":
+                warn(f"HEVC in MP4 is tagged '{tag}' — ExoPlayer (Jellyfin Android) cannot "
+                     f"Direct Play it; a lossless re-tag to hvc1 is available",
+                     repairable=True)
+
+    if is_mp4:
+        moov = mp4_moov_first(path)
+        if moov is False:
+            warn("the MP4 index (moov) sits at the end of the file — Android buffers "
+                 "nearly the whole file before the first frame (endless spinner); a "
+                 "lossless faststart repair is available",
+                 repairable=True)
+        if any(s.get("codec_type") == "data" for s in streams):
+            warn("the file contains data streams (bin_data) — ExoPlayer refuses to play "
+                 "files that contain them; a lossless strip is available",
+                 repairable=True)
+        risky = [s for s in audio if (s.get("codec_name") or "") in MOBILE_AUDIO_CODECS]
+        if risky:
+            names = ", ".join(sorted({(s.get("codec_name") or "") for s in risky}))
+            warn(f"audio track(s) are {names}: devices without a Dolby/DTS decoder "
+                 f"cannot Direct Play them — prefer the AAC track on mobile")
+
+    # Image-only subtitles with no text fallback anywhere: players burn them in via a
+    # full video transcode (a Pi cannot keep up with 1080p burn-in).
+    text_subs = [s for s in subs if (s.get("codec_name") or "") in TEXT_SUB_CODECS]
+    external_text = any(os.path.splitext(f)[1].lower() in SUB_EXT for f in files)
+    if subs and not text_subs and not external_text:
+        warn("only image-based subtitle tracks (PGS/VobSub) exist and there is no "
+             "external .srt/.ass — players burn the subtitles in via a full video "
+             "transcode; add external SRT subtitles for this episode")
+
+    return problems
 
 
 def extract_subtitle_text(path, stream_relative_index, ffmpeg):
@@ -185,7 +299,7 @@ def find_ffmpeg_tools():
     return tools
 
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # v2 added the mobile Direct-Play checks (invalidates old entries)
 CACHE_MTIME_TOLERANCE = 2  # seconds; SMB/NFS write times can differ slightly
 
 
@@ -243,7 +357,7 @@ def check_episode(path, base, files, tools, report_file, emit, rep):
         emit("  no subtitle streams (or ffprobe failed)")
         return 0
 
-    text_streams = [s for s in streams]  # image-based tracks are noted during extraction
+    text_streams = streams  # image-based tracks are noted during extraction
     suspicious = [s for s in text_streams if RE_SUSPICIOUS_TITLE.search(" " + (s["title"] or "") + " ")]
 
     # Describe the tracks.
@@ -284,6 +398,12 @@ def check_episode(path, base, files, tools, report_file, emit, rep):
                            f"| wrong={wrong_rel} pick={pick_rel}")
                     emit(f"  >> {fix.split(' | ')[0]}")
                     rep("SUBFIX", fix)
+
+    # Mobile Direct-Play compatibility (ExoPlayer): one extra ffprobe per uncached
+    # file. Runs before the (slow) subtitle extraction so the mobile findings always
+    # appear, even when extraction times out.
+    problems += check_mobile(
+        path, ffprobe_media_streams(path, tools["ffprobe"]), files, emit, rep)
 
     # Analyse the default track (or the only track).
     targets = [(idx, s) for idx, s in enumerate(text_streams) if s["default"]]

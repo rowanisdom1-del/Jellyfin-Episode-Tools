@@ -931,6 +931,294 @@ public class EpisodeToolsReportController : ControllerBase
     }
 
     /// <summary>
+    /// One-click mobile Direct-Play repair (Sub Check tab). Body: {path}. Lossless
+    /// stream-copy remux of an .mp4: the index moves to the front of the file
+    /// (faststart, so Android stops buffering the whole file before the first
+    /// frame), HEVC is re-tagged hvc1 (ExoPlayer cannot Direct Play hev1), and
+    /// data streams (bin_data) are dropped. The original is archived to the
+    /// plugin trash and the replacement is only swapped in after verification.
+    /// </summary>
+    [HttpPost("RepairMp4")]
+    public async Task<IActionResult> RepairMp4([FromBody] RepairMp4Body body)
+    {
+        var cfg = Plugin.Instance?.Configuration;
+        if (cfg is null)
+        {
+            return StatusCode(500, "Plugin not initialized.");
+        }
+
+        var path = (body.Path ?? string.Empty).Trim();
+        if (path.Length == 0 || !System.IO.File.Exists(path))
+        {
+            return NotFound("File not found.");
+        }
+
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not (".mp4" or ".m4v"))
+        {
+            return BadRequest("Only .mp4/.m4v files can be repaired.");
+        }
+
+        var allowed = new List<string>(cfg.EffectiveRenameFolders);
+        allowed.AddRange(cfg.EffectiveConvertFolders);
+        if (!allowed.Any(root => root.Length > 0 &&
+            path.StartsWith(root.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)))
+        {
+            return BadRequest("File is not under a configured series/scan folder.");
+        }
+
+        try
+        {
+            var result = await RepairMp4Async(path).ConfigureAwait(false);
+            _logger.LogInformation("[Episode Tools] Mobile repair for {Path}: {Result}", path, result);
+            return ContentText(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning("[Episode Tools] Mobile repair skipped for {Path}: {Reason}", path, ex.Message);
+            return ContentText(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[Episode Tools] Mobile repair failed for {Path}.", path);
+            return StatusCode(500, "Repair failed: " + ex.Message);
+        }
+    }
+
+    private async Task<string> RepairMp4Async(string path)
+    {
+        var probeArgs = new List<string>
+        {
+            "-v", "error",
+            "-show_entries", "stream=index,codec_type,codec_name,codec_tag_string,pix_fmt",
+            "-of", "json",
+            path
+        };
+        var (probeCode, probeOut) = await RunToolAsync(FfprobePath(), probeArgs).ConfigureAwait(false);
+        if (probeCode != 0)
+        {
+            throw new InvalidOperationException("ffprobe failed: " + probeOut);
+        }
+
+        var videos = new List<(int Index, string Codec, string Tag)>();
+        var audio = new List<int>();
+        var textSubs = new List<int>();
+        var dataStreams = 0;
+        string pixFmt = string.Empty;
+        using (var doc = JsonDocument.Parse(probeOut))
+        {
+            if (!doc.RootElement.TryGetProperty("streams", out var streams))
+            {
+                throw new InvalidOperationException("ffprobe returned no streams.");
+            }
+
+            foreach (var s in streams.EnumerateArray())
+            {
+                var type = s.TryGetProperty("codec_type", out var t) ? t.GetString() : null;
+                var index = s.TryGetProperty("index", out var i) && i.ValueKind == JsonValueKind.Number ? i.GetInt32() : -1;
+                var codec = s.TryGetProperty("codec_name", out var c) ? (c.GetString() ?? string.Empty) : string.Empty;
+                var tag = s.TryGetProperty("codec_tag_string", out var g) ? (g.GetString() ?? string.Empty).Trim('\0', ' ') : string.Empty;
+                switch (type)
+                {
+                    case "video":
+                        pixFmt = s.TryGetProperty("pix_fmt", out var p) ? (p.GetString() ?? string.Empty) : string.Empty;
+                        videos.Add((index, codec, tag));
+                        break;
+                    case "audio":
+                        audio.Add(index);
+                        break;
+                    case "subtitle":
+                        // Only text subtitles can survive a lossless MP4 copy.
+                        if (codec is "mov_text" or "subrip" or "srt" or "text" or "tx3g")
+                        {
+                            textSubs.Add(index);
+                        }
+                        break;
+                    case "data":
+                        dataStreams++;
+                        break;
+                }
+            }
+        }
+
+        // Hi10P 10-bit H.264: no phone can decode it and no lossless fix exists.
+        if (videos.Any(v => v.Codec == "h264") && pixFmt == "yuv420p10le")
+        {
+            throw new InvalidOperationException(
+                "cannot be repaired losslessly: Hi10P 10-bit H.264 needs a re-encode no Pi can afford");
+        }
+
+        var hev1 = videos.Any(v => v.Codec == "hevc" && v.Tag != "hvc1");
+        var alreadyClean = !hev1 && dataStreams == 0 && MoovComesFirst(path);
+        if (alreadyClean)
+        {
+            return "already mobile-friendly (faststart + hvc1, no data streams) — nothing to do";
+        }
+
+        var dir = Path.GetDirectoryName(path) ?? ".";
+        var tmp = Path.Combine(dir, Path.GetFileName(path) + ".mobifix.part");
+        try
+        {
+            var args = new List<string>
+            {
+                "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-fflags", "+genpts",
+                "-i", path
+            };
+            var videoOut = 0;
+            foreach (var (index, codec, tag) in videos)
+            {
+                // Skip cover art (mjpeg/png video streams) — MP4 muxers choke on them.
+                if (codec is "h264" or "hevc" or "av1" or "vp9" or "mpeg4")
+                {
+                    args.Add("-map");
+                    args.Add("0:" + index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    if (codec == "hevc" && tag != "hvc1")
+                    {
+                        args.Add("-tag:v:" + videoOut.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        args.Add("hvc1");
+                    }
+
+                    videoOut++;
+                }
+            }
+
+            foreach (var index in audio)
+            {
+                args.Add("-map");
+                args.Add("0:" + index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            foreach (var index in textSubs)
+            {
+                args.Add("-map");
+                args.Add("0:" + index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            args.Add("-map_chapters");
+            args.Add("-1");
+            args.Add("-dn");
+            args.Add("-c");
+            args.Add("copy");
+            args.Add("-movflags");
+            args.Add("+faststart");
+            args.Add("-f");
+            args.Add("mp4");
+            args.Add(tmp);
+
+            var ffmpeg = FfmpegPath();
+            var (code, output) = await RunToolAsync(ffmpeg, args).ConfigureAwait(false);
+            if (code != 0 || !System.IO.File.Exists(tmp) || new FileInfo(tmp).Length < 1024)
+            {
+                throw new Exception("ffmpeg remux failed (exit " + code + "): " + output);
+            }
+
+            if (!MoovComesFirst(tmp))
+            {
+                throw new Exception("the repaired file did not pass verification (index is not at the front)");
+            }
+
+            // Verified: swap atomically, keep the original restorable in the trash.
+            var backup = path + ".mobifix-old";
+            System.IO.File.Move(path, backup);
+            try
+            {
+                System.IO.File.Move(tmp, path);
+            }
+            catch (Exception)
+            {
+                System.IO.File.Move(backup, path);   // restore on failure
+                throw;
+            }
+
+            SaveToTrash(backup, path, "mobile-repair");
+            return "repaired with a verified lossless remux (faststart + hvc1, original archived to the plugin trash)";
+        }
+        finally
+        {
+            try
+            {
+                if (System.IO.File.Exists(tmp))
+                {
+                    System.IO.File.Delete(tmp);
+                }
+            }
+            catch (Exception)
+            {
+                // Cleanup is best effort.
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the file's moov index sits before its mdat (faststart). Scans the
+    /// top-level MP4 box list directly — ffprobe does not expose the box layout.
+    /// </summary>
+    private static bool MoovComesFirst(string path)
+    {
+        try
+        {
+            using var stream = System.IO.File.OpenRead(path);
+            var length = stream.Length;
+            long pos = 0;
+            long moov = -1;
+            long mdat = -1;
+            var header = new byte[8];
+            while (pos + 8 <= length)
+            {
+                stream.Position = pos;
+                if (stream.Read(header, 0, 8) < 8)
+                {
+                    break;
+                }
+
+                var ln = (long)((header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3]);
+                var type = Encoding.ASCII.GetString(header, 4, 4);
+                if (ln == 1)
+                {
+                    var big = new byte[8];
+                    if (stream.Read(big, 0, 8) < 8)
+                    {
+                        break;
+                    }
+
+                    ln = 0;
+                    foreach (var b in big)
+                    {
+                        ln = (ln << 8) | b;
+                    }
+                }
+                else if (ln == 0)
+                {
+                    ln = length - pos;
+                }
+                else if (ln < 8)
+                {
+                    return false;
+                }
+
+                if (type == "moov" && moov < 0)
+                {
+                    moov = pos;
+                }
+
+                if (type == "mdat" && mdat < 0)
+                {
+                    mdat = pos;
+                }
+
+                pos += ln;
+            }
+
+            return moov >= 0 && (mdat < 0 || moov < mdat);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Lists the trash archive: one entry per group folder with manifest metadata (original
     /// path, size, trashed date) plus unmanifested stray files.
     /// </summary>
@@ -1412,5 +1700,13 @@ public class EpisodeToolsReportController : ControllerBase
         /// <summary>Gets or sets the action: keep-largest, keep-newest or delete-others.</summary>
         [JsonPropertyName("action")]
         public string? Action { get; set; }
+    }
+
+    /// <summary>Request body for RepairMp4.</summary>
+    public sealed class RepairMp4Body
+    {
+        /// <summary>Gets or sets the absolute video file path.</summary>
+        [JsonPropertyName("path")]
+        public string? Path { get; set; }
     }
 }

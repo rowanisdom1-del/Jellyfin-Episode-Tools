@@ -27,6 +27,7 @@ DROP_SIGNS_SONGS=false
 DROP_GARBAGE_SUBS=false
 REDO=false
 REMUX=false
+REPAIR=false
 MIN_FREE_GB=10
 REPORT_FILE=""
 PREFS_FILE=""
@@ -69,6 +70,10 @@ Options:
   --remux-existing     Also re-mux existing .mp4 files that have no .mkv source,
                        replacing them after verification. Re-applies track preferences
                        and cleans subtitle text. Used by the per-show Convert button.
+  --repair-mp4          Scan existing .mp4 files and losslessly repair the ones that
+                        would fail Direct Play on mobile (MP4 index at the end of the
+                        file, HEVC tagged hev1 instead of hvc1, bin_data streams).
+                        Files that are already clean are skipped instantly.
   --min-free-gb N      Require at least N GB free on the destination before converting
                        a file (default 10). Files below the threshold are skipped.
   -h, --help           Show this help.
@@ -89,6 +94,7 @@ while [[ $# -gt 0 ]]; do
     --drop-garbage-subs) DROP_GARBAGE_SUBS=true ;;
     --redo) REDO=true ;;
     --remux-existing) REMUX=true ;;
+    --repair-mp4) REPAIR=true ;;
     --min-free-gb)
       if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
         echo "--min-free-gb needs a number (see --help)." >&2
@@ -478,26 +484,95 @@ is_safe_codec() {
   esac
 }
 
+# ---- mobile Direct-Play compatibility (Jellyfin Android / ExoPlayer) ----
+
+# Reads the top-level MP4 box list and reports where the moov index sits.
+# Returns 0 when moov comes before mdat (faststart), 1 when it does not, and
+# 2 when the scan fails (the caller treats that as needing repair).
+mp4_is_faststart() {
+  local f=$1 size pos ln t have_moov=-1 have_mdat=-1
+  local -a hdr=()
+  size=$(stat -c %s -- "$f") 2>/dev/null || return 2
+  pos=0
+  while (( pos + 8 <= size )); do
+    read -r -a hdr <<< "$(dd if="$f" bs=1 skip=$pos count=8 2>/dev/null | od -An -tu1 -v | tr '\n' ' ')"
+    (( ${#hdr[@]} == 8 )) || return 2
+    ln=$(( (hdr[0] << 24) | (hdr[1] << 16) | (hdr[2] << 8) | hdr[3] ))
+    t=$(dd if="$f" bs=1 skip=$((pos + 4)) count=4 2>/dev/null)
+    if (( ln == 1 )); then
+      ln=$(dd if="$f" bs=1 skip=$((pos + 8)) count=8 2>/dev/null | od -An -tu8 -v | tr -d ' ')
+    elif (( ln == 0 )); then
+      ln=$(( size - pos ))
+    elif (( ln < 8 )); then
+      return 2
+    fi
+    case "$t" in
+      moov) [[ $have_moov -lt 0 ]] && have_moov=$pos ;;
+      mdat) [[ $have_mdat -lt 0 ]] && have_mdat=$pos ;;
+    esac
+    pos=$(( pos + ln ))
+  done
+  (( have_moov >= 0 )) || return 2
+  (( have_mdat < 0 || have_moov < have_mdat )) && return 0
+  return 1
+}
+
+# Examines one existing .mp4 for mobile Direct-Play problems. Sets REPAIR_REASON
+# (empty = nothing to do) and REPAIR_BLOCKED (1 = detected but not fixable
+# losslessly). Checks: moov at the end, HEVC tagged hev1 instead of hvc1,
+# data streams (bin_data), and Hi10P 10-bit H.264 (reported, not repairable).
+mp4_repair_reason() {
+  REPAIR_REASON=""
+  REPAIR_BLOCKED=0
+  local f=$1 vline vcodec vtag pix
+  vline=$(ffprobe -v error -select_streams v -show_entries stream=codec_name,codec_tag_string,pix_fmt \
+    -of csv=p=0 -- "$f" 2>/dev/null | head -n 1)
+  vcodec=$(cut -d, -f1 <<< "$vline")
+  vtag=$(cut -d, -f2 <<< "$vline")
+  pix=$(cut -d, -f3 <<< "$vline")
+  if [[ "$vcodec" == "h264" && "$pix" == "yuv420p10le" ]]; then
+    REPAIR_REASON="video is Hi10P 10-bit H.264: no phone decodes it and it cannot be repaired losslessly (needs a re-encode)"
+    REPAIR_BLOCKED=1
+    return 0
+  fi
+  if [[ "$vcodec" == "hevc" && -n "$vtag" && "$vtag" != "hvc1" ]]; then
+    REPAIR_REASON="HEVC is tagged '$vtag' (ExoPlayer needs 'hvc1')"
+  fi
+  if ! mp4_is_faststart "$f"; then
+    [[ -n "$REPAIR_REASON" ]] && REPAIR_REASON+="; "
+    REPAIR_REASON+="MP4 index (moov) is at the end of the file (Android spins before playback)"
+  fi
+  if ffprobe -v error -select_streams d -show_entries stream=index -of csv=p=0 -- "$f" 2>/dev/null | grep -q .; then
+    [[ -n "$REPAIR_REASON" ]] && REPAIR_REASON+="; "
+    REPAIR_REASON+="file contains data streams (bin_data)"
+  fi
+  return 0
+}
+
 converted=0
 skipped=0
 failed=0
 total=0
 
 mapfile -d '' -t SRC_FILES_RAW < <(
-  for base in "${FOLDERS[@]}"; do
-    # -L follows symlinked episode files and library-view folders so files behind links
-    # are converted too; the realpath dedup below keeps the same file from appearing twice.
-    find -L "$base" -type f -iname '*.mkv' -print0 2>/dev/null
-  done
-  if $REMUX; then
+  # Repair mode looks at existing .mp4 files only (nothing to repair in an MKV
+  # losslessly — the faststart/tag problems are MP4 container problems).
+  if ! $REPAIR; then
+    for base in "${FOLDERS[@]}"; do
+      # -L follows symlinked episode files and library-view folders so files behind links
+      # are converted too; the realpath dedup below keeps the same file from appearing twice.
+      find -L "$base" -type f -iname '*.mkv' -print0 2>/dev/null
+    done
+  fi
+  if $REMUX || $REPAIR; then
     for base in "${FOLDERS[@]}"; do
       while IFS= read -r -d '' mp4; do
-        # MP4s that still have an MKV source are handled by the normal pass.
-        if find -L "$(dirname -- "$mp4")" -maxdepth 1 \
+        # MP4s that still have an MKV source are handled by the normal pass;
+        # repair mode includes them so the mobile check can decide.
+        if $REPAIR || ! find -L "$(dirname -- "$mp4")" -maxdepth 1 \
             -iname "$(basename -- "${mp4%.*}").mkv" -print -quit 2>/dev/null | grep -q .; then
-          continue
+          printf '%s\0' "$mp4"
         fi
-        printf '%s\0' "$mp4"
       done < <(find -L "$base" -type f -iname '*.mp4' -print0 2>/dev/null)
     done
   fi
@@ -544,6 +619,25 @@ for src in "${SRC_FILES[@]}"; do
     continue
   fi
 
+  # Repair mode: check an existing .mp4 for mobile Direct-Play problems (moov at
+  # the end, hev1 tag, data streams) before anything else; already-clean files
+  # skip instantly. Hi10P is reported as not losslessly repairable.
+  if $REPAIR && $INPLACE; then
+    mp4_repair_reason "$src"
+    if [[ -z "$REPAIR_REASON" ]]; then
+      echo "  Skipping: already mobile-friendly (faststart + hvc1, no data streams)."
+      skipped=$((skipped + 1))
+      continue
+    fi
+    if (( REPAIR_BLOCKED )); then
+      echo "  Skipping: $REPAIR_REASON"
+      report "$src" "$REPAIR_REASON"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    echo "  Mobile repair: $REPAIR_REASON"
+  fi
+
   # Read-only locations (network shares, write-protected folders) can never receive the
   # temporary file, so test that once with a touch instead of failing inside ffmpeg.
   src_dir=$(dirname -- "$src")
@@ -569,6 +663,13 @@ for src in "${SRC_FILES[@]}"; do
   fi
 
   # ---- per-show track selection (Episode Tools Shows page) ----
+  # Repair mode keeps the file exactly as it is: a lossless re-tag/re-mux must not
+  # silently drop tracks or change dispositions.
+  if $REPAIR; then
+    SUBPREF=""
+    AUDPREF=""
+    AUDPREF2=""
+  fi
   show=$(show_name_for "$src")
   get_show_pref "$show"
   set_default_disposition=false
@@ -609,7 +710,7 @@ for src in "${SRC_FILES[@]}"; do
   # ---- drop signs/songs/lyrics subtitle tracks (keep dialogue) ----
   # Word-boundary match: "English Subtitles" contains "titles" as a substring but must NOT be
   # treated as a titles track; only standalone words count.
-  if $DROP_SIGNS_SONGS && (( ${#SUB_INDICES[@]} > 1 )); then
+  if $DROP_SIGNS_SONGS && ! $REPAIR && (( ${#SUB_INDICES[@]} > 1 )); then
     kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
     dropped=""
     for i in "${!SUB_INDICES[@]}"; do
@@ -678,7 +779,7 @@ for src in "${SRC_FILES[@]}"; do
 # Uses python3 for the content analysis; without python3 the feature is skipped silently.
 # Every subtitle track is extracted in ONE ffmpeg pass (one read of the file instead of
 # one per track), each into its own output file.
-if $DROP_GARBAGE_SUBS && command -v python3 >/dev/null 2>&1 && (( ${#SUB_INDICES[@]} > 1 )); then
+if $DROP_GARBAGE_SUBS && ! $REPAIR && command -v python3 >/dev/null 2>&1 && (( ${#SUB_INDICES[@]} > 1 )); then
   GARBAGE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/epgarbage.XXXXXX")
   garbage_args=()
   for i in "${!SUB_INDICES[@]}"; do
@@ -786,7 +887,8 @@ fi
     codec=${ACODECS[$i]}
     if ! is_safe_codec audio "$codec"; then
       unsafe_audio+=" audio:$codec"
-      if $AUDIO_TO_AAC; then
+      # Repair mode never re-encodes: the goal is a minimal, lossless change.
+      if $AUDIO_TO_AAC && ! $REPAIR; then
         channels=${ACHANNELS[$i]:-2}
         if (( channels <= 2 )); then
           bitrate=192k
@@ -806,8 +908,7 @@ fi
   # When a per-show preference exists, flag the first audio and first subtitle
   # track as the default for players.
   disp_args=()
-  if $set_default_disposition; then
-    if (( ${#AUDIO_MAPS[@]} > 0 )); then
+  if $set_default_disposition; then    if (( ${#AUDIO_MAPS[@]} > 0 )); then
       disp_args+=(-disposition:a:0 default)
     fi
     if (( ${#SUB_MAPS[@]} > 0 )); then
@@ -815,7 +916,7 @@ fi
     fi
   fi
 
-  if [[ -n "$unsafe" ]] && ! $FORCE; then
+  if [[ -n "$unsafe" ]] && ! $FORCE && ! $REPAIR; then
     echo "  Skipping: unusual MP4 codec(s):${unsafe}"
     echo "  Use --force to attempt this file."
     report "$src" "unusual MP4 codec(s):${unsafe} (use --force to attempt)"
@@ -855,7 +956,7 @@ fi
   # garbage (e.g. "{=63}") and one cue per letter strobes on screen.
   declare -A CLEAN_MAP=()
   CLEANED_INPUTS=()
-  if $APPLY && (( ${#SUB_INDICES[@]} > 0 )); then
+  if $APPLY && ! $REPAIR && (( ${#SUB_INDICES[@]} > 0 )); then
     clean_py="$(dirname -- "$0")/clean_subs.py"
     if [[ -f "$clean_py" ]] && command -v python3 >/dev/null 2>&1; then
       CLEAN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/epclean.XXXXXX")
@@ -890,7 +991,9 @@ fi
   CURRENT_TMP=$tmp
 
   movflags=()
-  if $FASTSTART; then
+  # MP4-to-MP4 remuxes (repair / remux-existing) always get faststart: it is the
+  # whole point of repairing for mobile, and the file is rewritten anyway.
+  if $FASTSTART || $INPLACE; then
     movflags=(-movflags +faststart)
   fi
 
