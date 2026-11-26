@@ -499,7 +499,7 @@ public class EpisodeToolsReportController : ControllerBase
         Directory.CreateDirectory(trashDir);
         var removed = new List<string>();
         var errors = new List<string>();
-        foreach (var (path, _) in files)
+        foreach (var (path, size) in files)
         {
             if (string.Equals(path, keep, StringComparison.OrdinalIgnoreCase))
             {
@@ -513,13 +513,42 @@ public class EpisodeToolsReportController : ControllerBase
                     continue;
                 }
 
+                // Guard against a stale audit: if the file was renamed/replaced after the
+                // report was written, the path may now point at a different file. Only touch
+                // paths whose current size still matches the recorded one.
+                var currentSize = SafeLength(path);
+                if (currentSize is null || currentSize.Value != size)
+                {
+                    _logger.LogWarning(
+                        "[Episode Tools] Skipping {Path}: file changed since the audit (recorded size {Recorded}, current {Current}).",
+                        path,
+                        size,
+                        currentSize?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable");
+                    errors.Add($"{path}: file changed since the audit (skipped)");
+                    continue;
+                }
+
                 if (action == "delete-others")
                 {
                     System.IO.File.Delete(path);
                 }
                 else
                 {
-                    System.IO.File.Move(path, Path.Combine(trashDir, Path.GetFileName(path)), overwrite: true);
+                    // Never overwrite an already-archived file: duplicate groups often hold
+                    // the same basename in different folders, and a second move with
+                    // overwrite would silently destroy the first archived copy.
+                    var fileName = Path.GetFileName(path);
+                    var stem = Path.GetFileNameWithoutExtension(fileName);
+                    var ext = Path.GetExtension(fileName);
+                    var dest = Path.Combine(trashDir, fileName);
+                    for (var n = 1; System.IO.File.Exists(dest); n++)
+                    {
+                        dest = Path.Combine(
+                            trashDir,
+                            stem + "_" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + ext);
+                    }
+
+                    System.IO.File.Move(path, dest);
                 }
 
                 removed.Add(path);
@@ -552,6 +581,19 @@ public class EpisodeToolsReportController : ControllerBase
         catch (Exception)
         {
             return DateTime.MinValue;
+        }
+    }
+
+    /// <summary>File length in bytes, or null when the file cannot be stat'ed.</summary>
+    private static long? SafeLength(string path)
+    {
+        try
+        {
+            return new System.IO.FileInfo(path).Length;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 
