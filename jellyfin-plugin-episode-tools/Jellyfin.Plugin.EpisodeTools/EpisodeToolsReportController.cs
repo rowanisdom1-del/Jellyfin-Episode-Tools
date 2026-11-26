@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 using Jellyfin.Plugin.EpisodeTools.Intros;
 
@@ -26,10 +28,16 @@ public class EpisodeToolsReportController : ControllerBase
 
     /// <summary>Initializes a new instance of the <see cref="EpisodeToolsReportController"/> class.</summary>
     /// <param name="logger">Logger.</param>
-    public EpisodeToolsReportController(ILogger<EpisodeToolsReportController> logger)
+    /// <param name="sessionManager">Jellyfin sessions, for the playback guard (per-show convert).</param>
+    /// <param name="taskManager">Jellyfin's task manager, for the post-convert library scan.</param>
+    public EpisodeToolsReportController(
+        ILogger<EpisodeToolsReportController> logger,
+        ISessionManager sessionManager,
+        ITaskManager taskManager)
     {
         _logger = logger;
-    }
+        PlaybackGuard.Configure(sessionManager);
+        ScriptRunner.ConfigureTaskManager(taskManager);    }
 
     /// <summary>Returns raw JSON without re-serializing it into a JSON string.</summary>
     private ContentResult ContentJson(string json)

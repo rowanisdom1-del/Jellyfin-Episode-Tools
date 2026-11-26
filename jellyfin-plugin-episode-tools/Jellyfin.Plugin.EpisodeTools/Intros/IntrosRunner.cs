@@ -396,6 +396,11 @@ internal static class IntrosRunner
             seasonIndex++;
             ct.ThrowIfCancellationRequested();
 
+            // Playback guard: never fingerprint while someone is actually watching. The
+            // check runs between season groups, so pauses are always at file boundaries
+            // and a stopped session resumes the scan within seconds.
+            await PlaybackGuard.WaitWhilePlaybackActiveAsync(logger, ct).ConfigureAwait(false);
+
             if (totalMissing == 0)
             {
                 // Everything came from the cache; the season counter is the only progress.

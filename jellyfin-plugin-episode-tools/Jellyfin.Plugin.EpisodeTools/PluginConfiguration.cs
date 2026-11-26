@@ -252,6 +252,36 @@ public class PluginConfiguration : BasePluginConfiguration
     /// </summary>
     public string NotifyWebhookUrl { get; set; } = string.Empty;
 
+    // Raw serialized value for PauseWhenPlayback, same tolerant string pattern as above.
+    private string _pauseWhenPlayback = "true";
+
+    /// <summary>
+    /// Raw serialized value for PauseWhenPlayback. The XML element name is preserved.
+    /// </summary>
+    [XmlElement("PauseWhenPlayback")]
+    public string PauseWhenPlaybackRaw
+    {
+        get => _pauseWhenPlayback;
+        set => _pauseWhenPlayback = value ?? "true";
+    }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether conversions and scans pause at file
+    /// boundaries while Jellyfin users are playing media (default true). Turning it off
+    /// makes background work run unconditionally (it still runs at low priority).
+    /// This boolean accessor is XmlIgnored and parses many common textual representations.
+    /// </summary>
+    [XmlIgnore]
+    public bool PauseWhenPlayback
+    {
+        get
+        {
+            var s = (_pauseWhenPlayback ?? "true").Trim().ToLowerInvariant();
+            return !(s == "false" || s == "0" || s == "no" || s == "n" || s == "off");
+        }
+        set => _pauseWhenPlayback = value ? "true" : "false";
+    }
+
     /// <summary>
     /// Raw serialized value for DropSignsSongs. Kept as string for tolerant deserialization.
     /// The XML element name is preserved.

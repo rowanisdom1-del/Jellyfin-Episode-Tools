@@ -672,6 +672,17 @@
                             </div>
 
                             <div class="verticalSection">
+                                <h3 class="sectionTitle">Performance &amp; playback</h3>
+                                <div class="checkboxContainer checkboxContainer-withDescription">
+                                    <label class="emby-checkbox-label">
+                                        <input id="PauseWhenPlayback" name="PauseWhenPlayback" type="checkbox" is="emby-checkbox" />
+                                        <span>Pause conversions &amp; scans while users are playing media</span>
+                                    </label>
+                                    <div class="fieldDescription checkboxFieldDescription">On by default: conversions wait between files and intro scans wait between season groups while someone is actually watching something. Off: background work always runs (it still runs at low priority). Nothing is cancelled by playback — work simply waits and resumes.</div>
+                                </div>
+                            </div>
+
+                            <div class="verticalSection">
                                 <h3 class="sectionTitle">Notifications</h3>
                                 <div class="inputContainer">
                                     <label class="inputLabel inputLabelUnfocused" for="NotifyWebhookUrl">Notify webhook URL (optional)</label>
@@ -1018,6 +1029,7 @@
                     document.querySelector('#FaststartOptimize').checked = config.FaststartOptimize !== false;
                     document.querySelector('#DropSignsSongs').checked = config.DropSignsSongs !== false;
                     document.querySelector('#DropGarbageSubs').checked = config.DropGarbageSubs !== false;
+                    document.querySelector('#PauseWhenPlayback').checked = config.PauseWhenPlayback !== false;
                     document.querySelector('#MinFreeSpaceGb').value = (config.MinFreeSpaceGb !== undefined && config.MinFreeSpaceGb !== null) ? config.MinFreeSpaceGb : 10;
                     document.querySelector('#NotifyWebhookUrl').value = config.NotifyWebhookUrl || '';
                     document.querySelector('#IntroWindowMinutes').value = (config.IntroWindowMinutes !== undefined && config.IntroWindowMinutes !== null) ? config.IntroWindowMinutes : 4;
@@ -1054,6 +1066,7 @@
                         config.FaststartOptimize = document.querySelector('#FaststartOptimize').checked;
                         config.DropSignsSongs = document.querySelector('#DropSignsSongs').checked;
                         config.DropGarbageSubs = document.querySelector('#DropGarbageSubs').checked;
+                        config.PauseWhenPlayback = document.querySelector('#PauseWhenPlayback').checked;
                         var minFree = parseInt(document.querySelector('#MinFreeSpaceGb').value, 10);
                         config.MinFreeSpaceGb = isNaN(minFree) ? 10 : minFree;
                         config.NotifyWebhookUrl = document.querySelector('#NotifyWebhookUrl').value.trim();

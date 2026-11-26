@@ -30,6 +30,7 @@ REMUX=false
 MIN_FREE_GB=10
 REPORT_FILE=""
 PREFS_FILE=""
+PAUSE_FLAG=""
 FOLDERS=()
 
 usage() {
@@ -56,6 +57,8 @@ Options:
   --prefs FILE         Per-show track preferences, one line per show:
                        show <tab> subtitle-lang <tab> audio-lang.
                        Empty language = keep all; "none" subtitles = drop them.
+  --pause-flag FILE    (internal) Path of the playback guard flag file; the script
+                       waits between files while it contains "paused".
   --drop-signs-songs   Drop subtitle tracks whose title says signs/songs/lyrics/karaoke
                        (typical anime tracks) as long as another dialogue track exists.
   --drop-garbage-subS  Drop subtitle tracks whose content is mostly garbage (numbers,
@@ -100,6 +103,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       PREFS_FILE=$2
+      shift
+      ;;
+    --pause-flag)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--pause-flag needs a file path (see --help)." >&2
+        exit 1
+      fi
+      PAUSE_FLAG=$2
       shift
       ;;
     --report)
@@ -149,6 +160,22 @@ fi
 report() {
   [[ -n "$REPORT_FILE" ]] || return 0
   printf 'CANNOT\t%s\t%s\n' "$1" "$2" >> "$REPORT_FILE" 2>/dev/null || true
+}
+
+# wait_for_playback: when the plugin passed --pause-flag FILE, that file says "paused"
+# while someone is watching and "run" otherwise (a C# watchdog keeps it current). Waiting
+# happens here, at the top of the per-file loop, so nothing heavy runs during playback;
+# INT/TERM still interrupt the sleep immediately, so a Stop never waits.
+wait_for_playback() {
+  [[ -n "$PAUSE_FLAG" ]] || return 0
+  local said=""
+  while [[ "$(cat -- "$PAUSE_FLAG" 2>/dev/null)" == "paused" ]]; do
+    if [[ -z "$said" ]]; then
+      echo "  Paused: someone is watching; continuing when playback stops."
+      said=1
+    fi
+    sleep 15
+  done
 }
 
 # ---- per-show subtitle/audio preferences (Episode Tools Shows page) ----
@@ -501,6 +528,7 @@ for src in "${SRC_FILES[@]}"; do
 
   echo
   echo "File: $src"
+  wait_for_playback
 
   if [[ -e "$out" || -L "$out" ]] && ! $REDO && ! $INPLACE; then
     echo "  Skipping: destination already exists: $out"

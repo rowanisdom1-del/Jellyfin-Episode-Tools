@@ -6,9 +6,11 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.EpisodeTools;
@@ -21,6 +23,20 @@ internal static class ScriptRunner
 {
     private const int TailLines = 40;
     private const string SecondsToWaitAfterStop = "30";
+
+    private static ITaskManager? _taskManager;
+
+    /// <summary>
+    /// Wired up by the conversion tasks (and the per-show controller) with Jellyfin's
+    /// task manager, so a finished apply-mode conversion can queue a library scan.
+    /// </summary>
+    public static void ConfigureTaskManager(ITaskManager? taskManager)
+    {
+        if (taskManager is not null)
+        {
+            _taskManager = taskManager;
+        }
+    }
 
     /// <summary>
     /// Runs the rename script. Without <paramref name="apply"/> it only shows what would change.
@@ -163,6 +179,18 @@ internal static class ScriptRunner
         args.Add("--prefs");
         args.Add(prefsPath);
 
+        // Playback guard: when enabled, the script waits between files while this flag
+        // file says "paused"; a watchdog in RunAsync keeps the file current.
+        string? pauseFlagPath = null;
+        if (apply && cfg.PauseWhenPlayback)
+        {
+            pauseFlagPath = Path.Combine(
+                Plugin.Instance?.WorkFolder ?? Path.Combine(Path.GetTempPath(), "episode-tools"),
+                "pause-flag.txt");
+            args.Add("--pause-flag");
+            args.Add(pauseFlagPath);
+        }
+
         var total = 0;
         var folders = new List<string>(cfg.EffectiveConvertFolders);
         if (!string.IsNullOrWhiteSpace(folderOverride))
@@ -177,7 +205,9 @@ internal static class ScriptRunner
             total += CountMkvFiles(dir);
         }
 
-        return RunAsync(logger, "bash", "convert_mkv_to_mp4.sh", args, total, progress, cancellationToken, notifyApply: apply);
+        return RunAsync(
+            logger, "bash", "convert_mkv_to_mp4.sh", args, total, progress, cancellationToken,
+            notifyApply: apply, pauseFlagPath: pauseFlagPath);
     }
 
     /// <summary>
@@ -407,7 +437,8 @@ internal static class ScriptRunner
         int totalFiles,
         IProgress<double> progress,
         CancellationToken cancellationToken,
-        bool notifyApply = false)
+        bool notifyApply = false,
+        string? pauseFlagPath = null)
     {
         var scriptPath = ExtractScript(resourceName);
 
@@ -466,6 +497,13 @@ internal static class ScriptRunner
         logger.LogInformation("[Episode Tools] Starting: {Interpreter} {Script} {Args}", interpreter, resourceName, string.Join(' ', scriptArgs));
         progress.Report(0);
 
+        // Playback guard for the convert script: a tiny flag file tells bash to wait
+        // between files while someone is watching. It starts before the script so the
+        // very first file already sees a current state.
+        using var watchdog = string.IsNullOrEmpty(pauseFlagPath)
+            ? null
+            : PlaybackGuard.StartWatchdog(pauseFlagPath, logger, cancellationToken);
+
         var tail = new Queue<string>();
         var filesSeen = 0;
 
@@ -523,6 +561,15 @@ internal static class ScriptRunner
         process.WaitForExit();   // makes sure all output lines have been delivered
 
         var exitCode = process.ExitCode;
+
+        // Queue a library scan when an apply-mode convert produced new files, so Jellyfin
+        // picks them up right away. Done before the exit-code check: partially successful
+        // runs (some files failed) still converted something worth scanning for.
+        if (notifyApply && resourceName == "convert_mkv_to_mp4.sh")
+        {
+            TryQueueLibraryRefresh(logger, tail);
+        }
+
         if (exitCode == 127)
         {
             throw new InvalidOperationException(
@@ -548,6 +595,68 @@ internal static class ScriptRunner
         {
             _ = Task.Run(() => SendWebhookNotificationAsync(logger));
         }
+    }
+
+    /// <summary>
+    /// Queues Jellyfin's "Scan Media Library" task when the convert run produced at least
+    /// one new MP4, so the new files appear immediately instead of waiting for the next
+    /// scheduled scan. Best effort: a missing or busy task is logged and skipped.
+    /// </summary>
+    private static void TryQueueLibraryRefresh(ILogger logger, Queue<string> tail)
+    {
+        var taskManager = _taskManager;
+        if (taskManager is null)
+        {
+            return;
+        }
+
+        int converted;
+        lock (tail)
+        {
+            converted = tail
+                .Select(line => Regex.Match(line, @"(\d+) converted"))
+                .Where(m => m.Success)
+                .Select(m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
+                .LastOrDefault();
+        }
+
+        if (converted <= 0)
+        {
+            return;
+        }
+
+        var refresh = taskManager.ScheduledTasks.FirstOrDefault(t =>
+            string.Equals(t.ScheduledTask.Key, "RefreshLibrary", StringComparison.OrdinalIgnoreCase));
+        if (refresh is null)
+        {
+            logger.LogInformation(
+                "[Episode Tools] {Count} new file(s) converted, but no 'Scan Media Library' task was found for an automatic refresh.",
+                converted);
+            return;
+        }
+
+        if (refresh.State != TaskState.Idle)
+        {
+            logger.LogInformation(
+                "[Episode Tools] {Count} new file(s) converted; a library scan is already running, skipping the extra refresh.",
+                converted);
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await taskManager.Execute(refresh, new TaskOptions()).ConfigureAwait(false);
+                logger.LogInformation(
+                    "[Episode Tools] Library scan finished after converting {Count} new file(s).",
+                    converted);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "[Episode Tools] The library scan after converting did not finish cleanly.");
+            }
+        });
     }
 
     /// <summary>

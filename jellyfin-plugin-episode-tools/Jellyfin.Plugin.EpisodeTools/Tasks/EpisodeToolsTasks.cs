@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -125,9 +126,13 @@ public sealed class ConvertApplyTask : IScheduledTask
 
     /// <summary>Initializes a new instance of the <see cref="ConvertApplyTask"/> class.</summary>
     /// <param name="logger">Logger.</param>
-    public ConvertApplyTask(ILogger<ConvertApplyTask> logger)
+    /// <param name="sessionManager">Jellyfin sessions, for the playback guard.</param>
+    /// <param name="taskManager">Jellyfin's task manager, for the post-convert library scan.</param>
+    public ConvertApplyTask(ILogger<ConvertApplyTask> logger, ISessionManager sessionManager, ITaskManager taskManager)
     {
         _logger = logger;
+        PlaybackGuard.Configure(sessionManager);
+        ScriptRunner.ConfigureTaskManager(taskManager);
     }
 
     /// <inheritdoc />
@@ -239,9 +244,13 @@ public sealed class ConvertRedoTask : IScheduledTask
 
     /// <summary>Initializes a new instance of the <see cref="ConvertRedoTask"/> class.</summary>
     /// <param name="logger">Logger.</param>
-    public ConvertRedoTask(ILogger<ConvertRedoTask> logger)
+    /// <param name="sessionManager">Jellyfin sessions, for the playback guard.</param>
+    /// <param name="taskManager">Jellyfin's task manager, for the post-convert library scan.</param>
+    public ConvertRedoTask(ILogger<ConvertRedoTask> logger, ISessionManager sessionManager, ITaskManager taskManager)
     {
         _logger = logger;
+        PlaybackGuard.Configure(sessionManager);
+        ScriptRunner.ConfigureTaskManager(taskManager);
     }
 
     /// <inheritdoc />
