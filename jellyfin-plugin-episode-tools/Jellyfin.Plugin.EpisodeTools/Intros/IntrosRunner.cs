@@ -174,21 +174,6 @@ internal static class IntrosRunner
 
     private static (long Length, DateTime Modified, IReadOnlyList<IntroResult> Results, IntrosState? State)? _resultsCache;
 
-    /// <summary>True when the results file holds an intro for exactly this path.</summary>
-    public static bool HasIntro(string path)
-    {
-        var results = LoadResults();
-        foreach (var intro in results)
-        {
-            if (string.Equals(intro.File, path, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     /// <summary>
     /// True when the results file holds a usable intro or outro (one second or longer) for
     /// exactly this path — used by the media segment provider to decide whether to run.
@@ -698,7 +683,7 @@ internal static class IntrosRunner
             // Collect every pairwise match first; the season-wide consensus decides which
             // clusters are real intros (a recap or an OVA can no longer poison every file
             // it paired with via longest-match).
-            var pairMatches = new List<(string A, string B, double Start, double End)>();
+            var pairMatches = new List<(string A, string B, TimeRange ARange, TimeRange BRange)>();
             for (var i = 0; i < queue.Count; i++)
             {
                 // Build the left side's inverted index once per episode and reuse it across
@@ -707,9 +692,9 @@ internal static class IntrosRunner
                 for (var k = i + 1; k < queue.Count; k++)
                 {
                     var match = CompareEpisodes(queue[i].Points!, lhsIndex, queue[k].Points!, minDuration, maxDuration, window);
-                    if (match is not null)
+                    foreach (var range in match)
                     {
-                        pairMatches.Add((queue[i].Path, queue[k].Path, match.Value.Item1, match.Value.Item2));
+                        pairMatches.Add((queue[i].Path, queue[k].Path, range.Lhs, range.Rhs));
                     }
                 }
             }
@@ -842,8 +827,13 @@ internal static class IntrosRunner
 
     // ------------------------------------------------------------------ consensus (season-wide)
 
-    // Two pairwise matches belong to the same cluster when their (start, end) agree within
-    // this tolerance; cluster bounds are the median of their members.
+    // Two stretches belong to the same cluster when their durations agree within this
+    // tolerance; per-file bounds are the median of that file's own cluster ranges.
+    private const double ConsensusToleranceSeconds = 5;
+
+    // A recap or cold-open cluster chains into the cluster that follows it when, on some
+    // shared file, the first stretch ends within this gap of the second stretch's start.
+    // The earlier cluster is then pre-roll in front of the real segment.
     private const double ConsensusToleranceSeconds = 5;
 
     /// <summary>Consensus bounds for one episode, plus its match confidence.</summary>
@@ -862,24 +852,26 @@ internal static class IntrosRunner
 
     private sealed class MatchCluster
     {
-        public List<(string A, string B, double Start, double End)> Items { get; } = new();
+        public List<(string A, string B, TimeRange ARange, TimeRange BRange)> Items { get; } = new();
     }
 
     /// <summary>
     /// Turns a season's pairwise matches into per-episode bounds by consensus voting
     /// instead of longest-match-per-file:
-    /// matches are greedily clustered by (start, end) within tolerance, then winning
-    /// clusters are extracted one at a time — each must cover at least half of the files
-    /// still unassigned (by file count or by possible-pair count). Recaps and OVAs that
-    /// match nobody consistently never reach that threshold and are dropped instead of
+    /// matches are greedily clustered by duration within tolerance, then winning clusters
+    /// are extracted one at a time — each must cover at least half of the files still
+    /// unassigned (by file count or by possible-pair count). Recaps and OVAs that match
+    /// nobody consistently never reach that threshold and are dropped instead of
     /// poisoning the season; a second winning cluster (mid-season OP/ED swap, 24-episode
-    /// two-cour show) automatically covers the remaining files. Cluster bounds are the
-    /// median of the members, and the (nearly) zero cold-open rule is applied to the
-    /// median, not hardcoded per match.
+    /// two-cour show) automatically covers the remaining files.
+    /// Every match keeps both sides' own coordinates: two episodes with different
+    /// cold-open lengths match at an offset, so assigning one absolute (start, end) to
+    /// both files used to shift each file by the offset delta. A cluster that chains into
+    /// a later one (recap → OP) is demoted as pre-roll and the chained cluster wins.
     /// </summary>
     private static Dictionary<string, ConsensusBound> BuildConsensus(
         List<Job> queue,
-        List<(string A, string B, double Start, double End)> matches,
+        List<(string A, string B, TimeRange ARange, TimeRange BRange)> matches,
         ILogger logger,
         string context)
     {
@@ -898,10 +890,9 @@ internal static class IntrosRunner
                 break;
             }
 
-            MatchCluster? best = null;
-            var bestFiles = 0;
-            var bestMedian = (Start: 0.0, End: 0.0);
-            foreach (var cluster in ClusterRanges(active))
+            // Qualifying clusters with the per-file ranges of their members.
+            var qualified = new List<(MatchCluster Cluster, Dictionary<string, (double Start, double End)> Ranges, int Files)>();
+            foreach (var cluster in ClusterRanges(active).SelectMany(SplitCluster))
             {
                 var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var item in cluster.Items)
@@ -923,39 +914,79 @@ internal static class IntrosRunner
                     continue;
                 }
 
-                var median = MedianRange(cluster.Items);
-                if (best is null ||
-                    files.Count > bestFiles ||
-                    (files.Count == bestFiles && median.End - median.Start > bestMedian.End - bestMedian.Start))
+                var ranges = new Dictionary<string, (double Start, double End)>(StringComparer.OrdinalIgnoreCase);
+                foreach (var file in files)
                 {
-                    best = cluster;
-                    bestFiles = files.Count;
-                    bestMedian = median;
+                    ranges[file] = MedianRangeForFile(cluster, file);
+                }
+
+                qualified.Add((cluster, ranges, files.Count));
+            }
+
+            // Chained pre-roll demotion: when one qualifying cluster's stretch ends where
+            // another qualifying cluster's begins on some shared file, the earlier one is
+            // a recap/cold-open in front of the real segment — prefer the later one.
+            var demoted = new HashSet<MatchCluster>();
+            foreach (var first in qualified)
+            {
+                foreach (var second in qualified)
+                {
+                    if (ReferenceEquals(first.Cluster, second.Cluster))
+                    {
+                        continue;
+                    }
+
+                    foreach (var file in first.Ranges.Keys)
+                    {
+                        if (!second.Ranges.TryGetValue(file, out var secondRange))
+                        {
+                            continue;
+                        }
+
+                        var gap = secondRange.Start - first.Ranges[file].End;
+                        if (gap >= -1 && gap <= ChainedGapSeconds)
+                        {
+                            demoted.Add(first.Cluster);
+                            break;
+                        }
+                    }
                 }
             }
 
-            if (best is null)
+            MatchCluster? best = null;
+            Dictionary<string, (double Start, double End)>? bestRanges = null;
+            var bestFiles = 0;
+            var bestDuration = 0.0;
+            foreach (var (cluster, ranges, files) in qualified)
+            {
+                if (demoted.Contains(cluster))
+                {
+                    continue;
+                }
+
+                var duration = ranges.Values.Max(r => r.End - r.Start);
+                if (best is null || files > bestFiles || (files == bestFiles && duration > bestDuration))
+                {
+                    best = cluster;
+                    bestRanges = ranges;
+                    bestFiles = files;
+                    bestDuration = duration;
+                }
+            }
+
+            if (best is null || bestRanges is null)
             {
                 break;
             }
 
-            var medianStart = bestMedian.Start;
-            var medianEnd = bestMedian.End;
-            if (medianStart <= 0.5)
-            {
-                // Only the consensus may flatten the start to 0 (an intro that genuinely
-                // begins at absolute zero) — per-match "start <= 5 → 0" flattening used
-                // to swallow 3-5s cold-open bumpers.
-                medianStart = 0;
-            }
-
-            foreach (var file in best.Items.SelectMany(m => new[] { m.A, m.B }).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var (file, own) in bestRanges)
             {
                 if (!remaining.Remove(file))
                 {
                     continue;
                 }
 
+                var start = own.Start <= 0.5 ? 0 : own.Start;
                 var agree = 0;
                 var total = 0;
                 foreach (var m in matches)
@@ -967,22 +998,22 @@ internal static class IntrosRunner
                     }
 
                     total++;
-                    if (Math.Abs(m.Start - medianStart) <= ConsensusToleranceSeconds &&
-                        Math.Abs(m.End - medianEnd) <= ConsensusToleranceSeconds)
+                    var ownRange = string.Equals(m.A, file, StringComparison.OrdinalIgnoreCase) ? m.ARange : m.BRange;
+                    if (Math.Abs(ownRange.Start - own.Start) <= ConsensusToleranceSeconds &&
+                        Math.Abs(ownRange.End - own.End) <= ConsensusToleranceSeconds)
                     {
                         agree++;
                     }
                 }
 
-                result[file] = new ConsensusBound { Start = medianStart, End = medianEnd, Agree = agree, Total = total };
+                result[file] = new ConsensusBound { Start = start, End = own.End, Agree = agree, Total = total };
             }
 
             logger.LogInformation(
-                "[Episode Tools] {Context}: {Count} episode(s) share an intro around {Start:0.0}-{End:0.0}s (cluster of {Pairs} pair match(es)).",
+                "[Episode Tools] {Context}: {Count} episode(s) share a segment of about {Duration:0.0}s (cluster of {Pairs} pair match(es)).",
                 context,
                 bestFiles,
-                medianStart,
-                medianEnd,
+                bestDuration,
                 best.Items.Count);
         }
 
@@ -990,20 +1021,113 @@ internal static class IntrosRunner
     }
 
     /// <summary>
-    /// Greedily groups matches into clusters whose (start, end) agree within tolerance,
-    /// longest matches first so the strongest evidence seeds each cluster.
+    /// Splits a duration cluster into stretch groups: two items belong to the same
+    /// stretch when, on some shared file, their ranges overlap. Recap and OP often have
+    /// (nearly) identical durations but sit adjacent on the timeline, so duration alone
+    /// cannot separate them — averaging them would put every boundary mid-song.
     /// </summary>
-    private static List<MatchCluster> ClusterRanges(List<(string A, string B, double Start, double End)> matches)
+    private static IEnumerable<MatchCluster> SplitCluster(MatchCluster cluster)
+    {
+        var items = cluster.Items;
+        var n = items.Count;
+        var parent = new int[n];
+        for (var i = 0; i < n; i++)
+        {
+            parent[i] = i;
+        }
+
+        int Find(int x)
+        {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+
+            return x;
+        }
+
+        static TimeRange RangeFor((string A, string B, TimeRange ARange, TimeRange BRange) item, string file) =>
+            string.Equals(item.A, file, StringComparison.OrdinalIgnoreCase) ? item.ARange : item.BRange;
+
+        static bool SameStretch(
+            (string A, string B, TimeRange ARange, TimeRange BRange) x,
+            (string A, string B, TimeRange ARange, TimeRange BRange) y)
+        {
+            foreach (var f in new[] { x.A, x.B })
+            {
+                // Only compare the range of a file that is on BOTH sides of the pair.
+                if (!string.Equals(f, y.A, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(f, y.B, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var xr = RangeFor(x, f);
+                var yr = RangeFor(y, f);
+                if (Math.Min(xr.End, yr.End) - Math.Max(xr.Start, yr.Start) >= 1)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        for (var i = 0; i < n; i++)
+        {
+            for (var k = i + 1; k < n; k++)
+            {
+                var a = items[i];
+                var b = items[k];
+                var shared =
+                    string.Equals(a.A, b.A, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a.A, b.B, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a.B, b.A, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a.B, b.B, StringComparison.OrdinalIgnoreCase);
+                if (shared && SameStretch(a, b))
+                {
+                    var ra = Find(i);
+                    var rb = Find(k);
+                    if (ra != rb)
+                    {
+                        parent[ra] = rb;
+                    }
+                }
+            }
+        }
+
+        var groups = new Dictionary<int, MatchCluster>();
+        for (var i = 0; i < n; i++)
+        {
+            var root = Find(i);
+            if (!groups.TryGetValue(root, out var group))
+            {
+                groups[root] = group = new MatchCluster();
+            }
+
+            group.Items.Add(items[i]);
+        }
+
+        return groups.Values;
+    }
+
+    /// <summary>
+    /// Greedily groups matches into clusters whose durations agree within tolerance,
+    /// longest matches first so the strongest evidence seeds each cluster. Absolute
+    /// positions are deliberately ignored: offset matching (different cold-open lengths)
+    /// and the outro window's per-file base offset both shift start/end between files.
+    /// </summary>
+    private static List<MatchCluster> ClusterRanges(List<(string A, string B, TimeRange ARange, TimeRange BRange)> matches)
     {
         var clusters = new List<MatchCluster>();
-        foreach (var match in matches.OrderByDescending(m => m.End - m.Start))
+        foreach (var match in matches.OrderByDescending(m => m.ARange.Duration))
         {
             MatchCluster? target = null;
             foreach (var cluster in clusters)
             {
-                var (s, e) = MedianRange(cluster.Items);
-                if (Math.Abs(match.Start - s) <= ConsensusToleranceSeconds &&
-                    Math.Abs(match.End - e) <= ConsensusToleranceSeconds)
+                var medianDuration = Median(cluster.Items.Select(i => i.ARange.Duration).ToList());
+                if (Math.Abs(match.ARange.Duration - medianDuration) <= ConsensusToleranceSeconds)
                 {
                     target = cluster;
                     break;
@@ -1022,15 +1146,38 @@ internal static class IntrosRunner
         return clusters;
     }
 
-    private static (double Start, double End) MedianRange(List<(string A, string B, double Start, double End)> items)
+    /// <summary>Median of a file's own cluster ranges — each file keeps its own coordinates.</summary>
+    private static (double Start, double End) MedianRangeForFile(MatchCluster cluster, string file)
     {
-        return (Median(items.Select(m => m.Start).OrderBy(v => v).ToList()), Median(items.Select(m => m.End).OrderBy(v => v).ToList()));
+        var starts = new List<double>();
+        var ends = new List<double>();
+        foreach (var item in cluster.Items)
+        {
+            if (string.Equals(item.A, file, StringComparison.OrdinalIgnoreCase))
+            {
+                starts.Add(item.ARange.Start);
+                ends.Add(item.ARange.End);
+            }
+            else if (string.Equals(item.B, file, StringComparison.OrdinalIgnoreCase))
+            {
+                starts.Add(item.BRange.Start);
+                ends.Add(item.BRange.End);
+            }
+        }
+
+        return (Median(starts), Median(ends));
     }
 
     private static double Median(List<double> values)
     {
-        var mid = values.Count / 2;
-        return values.Count % 2 == 1 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+        if (values.Count == 0)
+        {
+            return 0;
+        }
+
+        var sorted = values.OrderBy(v => v).ToList();
+        var mid = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
     }
 
     private static List<Job> EnumerateJobs(List<string> folders)
@@ -1432,47 +1579,45 @@ internal static class IntrosRunner
 
     // ------------------------------------------------------------------ comparison (ported)
 
-    private static (double Start, double End)? CompareEpisodes(
+    /// <summary>
+    /// Returns every shared stretch of the two fingerprints that passes the duration
+    /// guards — as a pair of ranges, one per side. Two episodes whose cold opens have
+    /// different lengths match at an offset, so the two files' coordinates differ and
+    /// each side needs its own range (the consensus votes on durations, then takes each
+    /// file's own per-cluster median).
+    /// </summary>
+    private static List<(TimeRange Lhs, TimeRange Rhs)> CompareEpisodes(
         uint[] lhs, Dictionary<uint, int> lhsIndex, uint[] rhs, int minIntroDuration, int maxIntroDuration, int windowSeconds)
     {
-        var ranges = SearchInvertedIndex(lhs, lhsIndex, rhs);
-        TimeRange? best = null;
+        var passing = new List<(TimeRange Lhs, TimeRange Rhs)>();
 
-        foreach (var range in ranges)
+        foreach (var range in SearchInvertedIndex(lhs, lhsIndex, rhs))
         {
-            if (best is null || range.Duration > best.Duration)
+            var duration = range.Lhs.Duration;
+
+            if (duration > maxIntroDuration)
             {
-                best = range;
+                // An over-long shared stretch is not an intro (e.g. whole episodes that match).
+                continue;
             }
+
+            // Identical-first-minutes guard: two files sharing most of the fingerprint window
+            // (special vs episode 1, identical NCOP + recap builds) are not an intro — a match
+            // covering more than 60% of the decoded window is the whole shared head.
+            if (windowSeconds > 0 && duration > 0.6 * windowSeconds)
+            {
+                continue;
+            }
+
+            if (duration < minIntroDuration)
+            {
+                continue;
+            }
+
+            passing.Add(range);
         }
 
-        if (best is null)
-        {
-            return null;
-        }
-
-        var (start, end) = (best.Start, best.End);
-
-        if (end - start > maxIntroDuration)
-        {
-            // An over-long shared stretch is not an intro (e.g. whole episodes that match).
-            return null;
-        }
-
-        // Identical-first-minutes guard: two files sharing most of the fingerprint window
-        // (special vs episode 1, identical NCOP + recap builds) are not an intro — a match
-        // covering more than 60% of the decoded window is the whole shared head.
-        if (windowSeconds > 0 && end - start > 0.6 * windowSeconds)
-        {
-            return null;
-        }
-
-        if (end - start < minIntroDuration)
-        {
-            return null;
-        }
-
-        return (start, end);
+        return passing;
     }
 
     /// <summary>
@@ -1490,7 +1635,7 @@ internal static class IntrosRunner
         return index;
     }
 
-    private static List<TimeRange> SearchInvertedIndex(uint[] lhs, Dictionary<uint, int> lhsIndex, uint[] rhs)
+    private static List<(TimeRange Lhs, TimeRange Rhs)> SearchInvertedIndex(uint[] lhs, Dictionary<uint, int> lhsIndex, uint[] rhs)
     {
         var rhsIndex = BuildIndex(rhs);
 
@@ -1509,20 +1654,20 @@ internal static class IntrosRunner
             }
         }
 
-        var result = new List<TimeRange>();
+        var result = new List<(TimeRange Lhs, TimeRange Rhs)>();
         foreach (var shift in shifts)
         {
             var range = FindContiguous(lhs, rhs, shift, maxDifferences: 6, maximumTimeSkip: 3.5);
             if (range is not null)
             {
-                result.Add(range);
+                result.Add(range.Value);
             }
         }
 
         return result;
     }
 
-    private static TimeRange? FindContiguous(uint[] lhs, uint[] rhs, int shift, int maxDifferences, double maximumTimeSkip)
+    private static (TimeRange Lhs, TimeRange Rhs)? FindContiguous(uint[] lhs, uint[] rhs, int shift, int maxDifferences, double maximumTimeSkip)
     {
         var leftOffset = 0;
         var rightOffset = 0;
@@ -1577,7 +1722,10 @@ internal static class IntrosRunner
             return null;
         }
 
-        return lhsRange;
+        // Same matched indices, sorted independently per side (the match is monotonic, so
+        // sorting preserves the pairing): the right side's own coordinates.
+        var rhsRange = TimeRangeHelpers.FindContiguous(rhsTimes.ToArray(), maximumTimeSkip);
+        return rhsRange is null ? null : (lhsRange, rhsRange);
     }
 
     // ------------------------------------------------------------------ silence snap
@@ -1623,7 +1771,6 @@ internal static class IntrosRunner
 
             var raw = Encoding.UTF8.GetString(
                 await RunProcessAsync(FfmpegPath(), args, true, logger, ct).ConfigureAwait(false));
-            var originalEnd = new TimeRange(introEnd - 15, introEnd);
             var ambiguousZone = new TimeRange(introEnd - AmbiguousWindowSeconds, introEnd + AmbiguousWindowSeconds);
 
             // Among the silences that intersect the end of the matched intro, pick the one
@@ -2262,7 +2409,7 @@ internal static class IntrosRunner
 
             _lastMessage = $"outro matching season {seasonIndex}/{groups.Count} ({queue.Count} episode(s))";
 
-            var pairMatches = new List<(string A, string B, double Start, double End)>();
+            var pairMatches = new List<(string A, string B, TimeRange ARange, TimeRange BRange)>();
             for (var i = 0; i < queue.Count; i++)
             {
                 // One inverted index per left episode, reused across the whole inner loop.
@@ -2270,9 +2417,9 @@ internal static class IntrosRunner
                 for (var k = i + 1; k < queue.Count; k++)
                 {
                     var match = CompareEpisodes(queue[i].Points!, lhsIndex, queue[k].Points!, minDuration, maxDuration, window);
-                    if (match is not null)
+                    foreach (var range in match)
                     {
-                        pairMatches.Add((queue[i].Path, queue[k].Path, match.Value.Item1, match.Value.Item2));
+                        pairMatches.Add((queue[i].Path, queue[k].Path, range.Lhs, range.Rhs));
                     }
                 }
             }
