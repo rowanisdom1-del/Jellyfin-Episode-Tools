@@ -261,7 +261,8 @@ public class EpisodeToolsReportController : ControllerBase
             show = p.Show,
             sub = p.SubtitleLanguage,
             aud = p.AudioLanguage,
-            aud2 = p.AudioFallback
+            aud2 = p.AudioFallback,
+            intro = p.IntroScanEnabled
         });
 
         return ContentJson(JsonSerializer.Serialize(new { prefs }));
@@ -300,20 +301,24 @@ public class EpisodeToolsReportController : ControllerBase
         }
 
         var list = cfg.Configuration.ShowPreferences;
+        var introScan = body.Intro ?? true;
         var existing = list.FirstOrDefault(p => string.Equals(p.Show, show, StringComparison.OrdinalIgnoreCase));
         if (existing is null)
         {
-            list.Add(new ShowPreference(show, sub, aud, audFallback));
+            list.Add(new ShowPreference(show, sub, aud, audFallback) { IntroScanEnabled = introScan });
         }
         else
         {
             existing.SubtitleLanguage = sub;
             existing.AudioLanguage = aud;
             existing.AudioFallback = audFallback;
+            existing.IntroScanEnabled = introScan;
         }
 
         cfg.SaveConfiguration();
-        _logger.LogInformation("[Episode Tools] Saved track preference for '{Show}': subtitles='{Sub}', audio='{Aud}'.", show, sub, aud);
+        _logger.LogInformation(
+            "[Episode Tools] Saved preference for '{Show}': subtitles='{Sub}', audio='{Aud}', introScan={Intro}.",
+            show, sub, aud, introScan ? "on" : "off");
         return ContentText("saved");
     }
 
@@ -647,6 +652,10 @@ public class EpisodeToolsReportController : ControllerBase
         /// <summary>Gets or sets the fallback audio language: "" or a language code.</summary>
         [JsonPropertyName("aud2")]
         public string? Aud2 { get; set; }
+
+        /// <summary>Gets or sets whether the intro scanner includes this show (default true).</summary>
+        [JsonPropertyName("intro")]
+        public bool? Intro { get; set; }
     }
 
     /// <summary>Request body for ConvertShow.</summary>

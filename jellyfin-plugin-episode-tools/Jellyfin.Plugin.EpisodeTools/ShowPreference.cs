@@ -41,6 +41,13 @@ public class ShowPreference
     /// "" or a language code. Never removes all audio either way.
     /// </summary>
     public string AudioFallback { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the fast intro scanner should include this
+    /// show (default true). Turned off on the Shows tab for shows whose pairwise matching
+    /// produces garbage (single specials, short-form content).
+    /// </summary>
+    public bool IntroScanEnabled { get; set; } = true;
 }
 
 /// <summary>

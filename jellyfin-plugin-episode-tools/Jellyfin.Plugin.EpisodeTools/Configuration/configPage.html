@@ -749,6 +749,7 @@
                                             <th>Episodes</th>
                                             <th>.mkv</th>
                                             <th>Subs found</th>
+                                            <th style="text-align:left;">Intro scan</th>
                                             <th style="text-align:left;">Default subtitles</th>
                                             <th style="text-align:left;">Default audio</th>
                                             <th style="text-align:left;">Audio fallback</th>
@@ -757,7 +758,7 @@
                                         </tr>
                                     </thead>
                                     <tbody id="ShowsBody">
-                                        <tr><td colspan="9">Loading…</td></tr>
+                                        <tr><td colspan="10">Loading…</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -854,10 +855,11 @@
                                             <th style="text-align:left;">Episode file</th>
                                             <th>Intro</th>
                                             <th>Length</th>
+                                            <th style="text-align:left;">Override</th>
                                         </tr>
                                     </thead>
                                     <tbody id="IntrosBody">
-                                        <tr><td colspan="5">Loading…</td></tr>
+                                        <tr><td colspan="6">Loading…</td></tr>
                                     </tbody>
                                 </table>
                                 <div class="epInfoLine" style="margin-top:1em;">
@@ -1161,21 +1163,30 @@
                 sel.value = has ? current : '';
             }
 
-            function savePref(show, sub, aud, aud2, btn) {
-                btn.disabled = true;
-                btn.textContent = '…';
+            function savePref(show, sub, aud, aud2, intro, btn, busyEl) {
+                if (btn) { btn.disabled = true; btn.textContent = '…'; }
+                else if (busyEl) { busyEl.disabled = true; }
                 ApiClient.ajax({
                     type: 'POST',
                     url: ApiClient.getUrl('EpisodeTools/ShowPrefs'),
                     dataType: 'text',
-                    data: JSON.stringify({ show: show, sub: sub, aud: aud, aud2: aud2 }),
+                    data: JSON.stringify({ show: show, sub: sub, aud: aud, aud2: aud2, intro: !!intro }),
                     contentType: 'application/json'
                 }).then(function () {
-                    btn.textContent = 'Saved ✓';
-                    setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 1500);
+                    if (btn) {
+                        btn.textContent = 'Saved ✓';
+                        setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 1500);
+                    }
+                    if (busyEl) { busyEl.disabled = false; }
                 }).catch(function () {
-                    btn.textContent = 'Failed ✗';
-                    setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 2500);
+                    if (btn) {
+                        btn.textContent = 'Failed ✗';
+                        setTimeout(function () { btn.textContent = 'Save'; btn.disabled = false; }, 2500);
+                    } else if (busyEl) {
+                        busyEl.disabled = false;
+                        busyEl.checked = !busyEl.checked;
+                        Dashboard.alert('Episode Tools: saving the show preference failed. Check the server connection and try again.');
+                    }
                 });
             }
 
@@ -1237,7 +1248,7 @@
                     var prefData = results[1] || { prefs: [] };
                     var prefs = {};
                     (prefData.prefs || []).forEach(function (p) {
-                        prefs[(p.show || '').toLowerCase()] = { sub: p.sub || '', aud: p.aud || '', aud2: p.aud2 || '' };
+                        prefs[(p.show || '').toLowerCase()] = { sub: p.sub || '', aud: p.aud || '', aud2: p.aud2 || '', intro: p.intro !== false };
                     });
 
                     var body = document.querySelector('#ShowsBody');
@@ -1247,7 +1258,7 @@
                         shows.length + ' show(s) found' + (data.foldersScanned ? ' in ' + data.foldersScanned + ' folder(s).' : '.');
 
                     shows.forEach(function (s) {
-                        var saved = prefs[(s.name || '').toLowerCase()] || { sub: '', aud: '', aud2: '' };
+                        var saved = prefs[(s.name || '').toLowerCase()] || { sub: '', aud: '', aud2: '', intro: true };
                         var tr = document.createElement('tr');
 
                         var tdName = document.createElement('td');
@@ -1269,6 +1280,17 @@
                         tdLangs.textContent = (s.subLangs && s.subLangs.length ? s.subLangs.join(', ') : '—');
                         tdLangs.style.textAlign = 'center';
                         tr.appendChild(tdLangs);
+
+                        var tdIntro = document.createElement('td');
+                        var introCb = document.createElement('input');
+                        introCb.type = 'checkbox';
+                        introCb.checked = saved.intro !== false;
+                        introCb.title = 'Include this show in intro scans (uncheck to skip it)';
+                        introCb.addEventListener('change', function () {
+                            savePref(s.name, selSub.value, selAud.value, selAud2.value, introCb.checked, null, introCb);
+                        });
+                        tdIntro.appendChild(introCb);
+                        tr.appendChild(tdIntro);
 
                         var tdSub = document.createElement('td');
                         var selSub = document.createElement('select');
@@ -1298,7 +1320,7 @@
                         btn.className = 'raised button-mini emby-button';
                         btn.textContent = saved.sub || saved.aud || saved.aud2 ? 'Update' : 'Save';
                         btn.addEventListener('click', function () {
-                            savePref(s.name, selSub.value, selAud.value, selAud2.value, btn);
+                            savePref(s.name, selSub.value, selAud.value, selAud2.value, introCb.checked, btn);
                         });
                         tdBtn.appendChild(btn);
                         tr.appendChild(tdBtn);
@@ -1320,13 +1342,13 @@
                     });
 
                     if (shows.length === 0) {
-                        body.innerHTML = '<tr><td colspan="9">No shows found — check the folders on the Settings tab.</td></tr>';
+                        body.innerHTML = '<tr><td colspan="10">No shows found — check the folders on the Settings tab.</td></tr>';
                     }
                     pollStatus();
                     Dashboard.hideLoadingMsg();
                 }).catch(function () {
                     document.querySelector('#ShowsBody').innerHTML =
-                        '<tr><td colspan="9">Could not load the shows. Is plugin v2.2.0+ installed?</td></tr>';
+                        '<tr><td colspan="10">Could not load the shows. Is plugin v2.2.0+ installed?</td></tr>';
                     Dashboard.hideLoadingMsg();
                 });
             }
@@ -1689,14 +1711,26 @@
                             tdLen.textContent = Math.round(r.end - r.start) + 's';
                             tdLen.style.textAlign = 'center';
                             tr.appendChild(tdLen);
+
+                            var tdOv = document.createElement('td');
+                            var ovBtn = document.createElement('button');
+                            ovBtn.setAttribute('is', 'emby-button');
+                            ovBtn.setAttribute('type', 'button');
+                            ovBtn.className = 'raised button-mini emby-button';
+                            ovBtn.textContent = 'Edit';
+                            ovBtn.title = 'Fine-tune this intro inline and save it as a manual override (the scanner will keep these exact times)';
+                            ovBtn.addEventListener('click', function () { startOverrideEdit(r, tr); });
+                            tdOv.appendChild(ovBtn);
+                            tr.appendChild(tdOv);
+
                             body.appendChild(tr);
                         });
                         if (intros.length === 0) {
-                            body.innerHTML = '<tr><td colspan="5">No intros recorded yet — run a scan.</td></tr>';
+                            body.innerHTML = '<tr><td colspan="6">No intros recorded yet — run a scan.</td></tr>';
                         }
                     }).catch(function () {
                         document.querySelector('#IntrosBody').innerHTML =
-                            '<tr><td colspan="5">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
+                            '<tr><td colspan="6">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
                     });
             }
 
@@ -1727,6 +1761,111 @@
 
             function loadIntros() {
                 pollIntros();
+            }
+
+            /* ---------- inline intro override editor (F6) ---------- */
+            function startOverrideEdit(r, tr) {
+                var tds = tr.querySelectorAll('td');
+                if (tds.length < 6 || tr.dataset.editing === '1') { return; }
+                tr.dataset.editing = '1';
+
+                var tdIntro = tds[3];
+                var tdLen = tds[4];
+                var tdAct = tds[5];
+                tdIntro.innerHTML = '';
+                tdLen.innerHTML = '';
+                tdAct.innerHTML = '';
+
+                var inpStart = document.createElement('input');
+                inpStart.type = 'number';
+                inpStart.step = '0.5';
+                inpStart.min = '0';
+                inpStart.value = r.start;
+                inpStart.className = 'emby-input';
+                inpStart.style.width = '90px';
+                var labStart = document.createElement('span');
+                labStart.textContent = 'start ';
+                labStart.style.opacity = '0.7';
+                tdIntro.appendChild(labStart);
+                tdIntro.appendChild(inpStart);
+
+                var inpEnd = document.createElement('input');
+                inpEnd.type = 'number';
+                inpEnd.step = '0.5';
+                inpEnd.min = '0';
+                inpEnd.value = r.end;
+                inpEnd.className = 'emby-input';
+                inpEnd.style.width = '90px';
+                var labEnd = document.createElement('span');
+                labEnd.textContent = 'end ';
+                labEnd.style.opacity = '0.7';
+                tdLen.appendChild(labEnd);
+                tdLen.appendChild(inpEnd);
+
+                var saveBtn = document.createElement('button');
+                saveBtn.setAttribute('is', 'emby-button');
+                saveBtn.setAttribute('type', 'button');
+                saveBtn.className = 'raised button-mini emby-button';
+                saveBtn.textContent = 'Save';
+                saveBtn.title = 'Save as a manual intro override for this exact episode';
+
+                var cancelBtn = document.createElement('button');
+                cancelBtn.setAttribute('is', 'emby-button');
+                cancelBtn.setAttribute('type', 'button');
+                cancelBtn.className = 'raised button-mini emby-button';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.title = 'Discard the changes and reload the list';
+
+                tdAct.appendChild(saveBtn);
+                tdAct.appendChild(document.createTextNode(' '));
+                tdAct.appendChild(cancelBtn);
+
+                cancelBtn.addEventListener('click', function () { pollIntros(); });
+
+                saveBtn.addEventListener('click', function () {
+                    inpStart.style.outline = '';
+                    inpEnd.style.outline = '';
+                    var start = parseFloat(inpStart.value);
+                    var end = parseFloat(inpEnd.value);
+                    var bad = [];
+                    if (isNaN(start) || start < 0) { inpStart.style.outline = '2px solid #c00'; bad.push('start'); }
+                    if (isNaN(end) || end <= start) { inpEnd.style.outline = '2px solid #c00'; bad.push('end'); }
+                    if (bad.length > 0) {
+                        Dashboard.alert('Episode Tools: fix the highlighted field(s) (' + bad.join(', ') + ') — end must be a number greater than start.');
+                        return;
+                    }
+
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = '…';
+                    ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
+                        // The override episode match is a case-insensitive fragment of the
+                        // file path, so the base file name pins this rule to exactly this
+                        // episode (same convention as the Settings tab editor).
+                        var base = (r.file || '').split('/').pop().split('\\').pop();
+                        var kept = (config.IntroOverrides || []).filter(function (ov) {
+                            return !(ov
+                                && (ov.Show || '').toLowerCase() === (r.show || '').toLowerCase()
+                                && (ov.Season || '') === (r.season || '')
+                                && (ov.Episode || '').toLowerCase() === base.toLowerCase());
+                        });
+                        kept.push({
+                            Show: r.show || '',
+                            Season: r.season || '',
+                            Episode: base,
+                            Start: start,
+                            End: end
+                        });
+                        config.IntroOverrides = kept;
+                        return ApiClient.updatePluginConfiguration(pluginUniqueId, config);
+                    }).then(function () {
+                        saveBtn.textContent = 'Saved ✓';
+                        setTimeout(pollIntros, 800);
+                    }).catch(function () {
+                        saveBtn.disabled = false;
+                        saveBtn.textContent = 'Save';
+                        Dashboard.alert('Episode Tools: saving the override failed. Check the server connection and try again.');
+                    });
+                });
             }
 
             /* ---------- lazy tab data + pageshow ---------- */

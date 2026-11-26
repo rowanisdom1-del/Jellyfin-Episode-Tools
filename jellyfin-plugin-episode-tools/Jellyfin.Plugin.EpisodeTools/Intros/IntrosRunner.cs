@@ -271,6 +271,28 @@ internal static class IntrosRunner
 
         // Every video file under every configured show folder, grouped per (show folder, season).
         var jobs = EnumerateJobs(folders);
+
+        // Per-show opt-out from the Shows tab: shows with IntroScanEnabled=false (single
+        // specials, short-form content) are excluded before anything is fingerprinted.
+        var skipShows = new HashSet<string>(
+            (cfg.ShowPreferences ?? new List<ShowPreference>())
+                .Where(p => p is not null && !p.IntroScanEnabled)
+                .Select(p => (p.Show ?? string.Empty).Trim())
+                .Where(s => s.Length > 0),
+            StringComparer.OrdinalIgnoreCase);
+        if (skipShows.Count > 0)
+        {
+            var beforeCount = jobs.Count;
+            jobs = jobs.Where(j => !skipShows.Contains(j.Show)).ToList();
+            if (jobs.Count < beforeCount)
+            {
+                logger.LogInformation(
+                    "[Episode Tools] Intro scan: skipping {Count} episode(s) in {Shows} show(s) disabled on the Shows tab.",
+                    beforeCount - jobs.Count,
+                    skipShows.Count);
+            }
+        }
+
         logger.LogInformation(
             "[Episode Tools] Intro scan: {Jobs} episode(s) enumerated. Folders: {Folders}",
             jobs.Count,
