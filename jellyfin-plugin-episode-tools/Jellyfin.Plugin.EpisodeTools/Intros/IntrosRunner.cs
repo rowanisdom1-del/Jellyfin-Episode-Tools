@@ -297,15 +297,6 @@ internal static class IntrosRunner
     }
 
     /// <summary>One container chapter, already converted to seconds.</summary>
-    internal sealed class ChapterPoint
-    {
-        public double Start { get; set; }
-
-        public double End { get; set; }
-
-        public string Title { get; set; } = string.Empty;
-    }
-
     /// <summary>The scan itself.</summary>
     private static async Task RunAsync(ILogger logger, CancellationToken ct, string? showFilter = null)
     {

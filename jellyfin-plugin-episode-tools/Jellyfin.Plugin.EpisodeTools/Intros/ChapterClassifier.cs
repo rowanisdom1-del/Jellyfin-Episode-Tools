@@ -19,6 +19,16 @@ public sealed class ChapterWindow
     public string Label { get; init; } = string.Empty;
 }
 
+/// <summary>One container chapter, already converted to seconds.</summary>
+internal sealed class ChapterPoint
+{
+    public double Start { get; set; }
+
+    public double End { get; set; }
+
+    public string Title { get; set; } = string.Empty;
+}
+
 /// <summary>
 /// Classifies container chapters into intro (OP/opening) and outro (ED/ending/credits)
 /// windows, implementing the priority chain: Manual Override → Valid Embedded Chapter →
