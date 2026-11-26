@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.IO.Enumeration;
 using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -1107,24 +1106,18 @@ internal static class IntrosRunner
     }
 
     /// <summary>
-    /// Enumerates video files with their size and mtime in the same directory listing pass
-    /// (FileSystemEnumerable reads the dirent metadata, so no extra per-file stat is needed
-    /// on SMB/NFS mounts).
+    /// Enumerates video files with their size and mtime staged in the same directory
+    /// listing pass (FileInfo metadata comes straight from the find data, so cache
+    /// validation below needs no extra per-file stat round trip on SMB/NFS).
     /// </summary>
     private static IEnumerable<(string Path, long Size, double MtimeUtc)> SafeEnumerateFiles(string dir, EnumerationOptions options)
     {
         try
         {
-            var enumerable = new FileSystemEnumerable<(string Path, long Size, double MtimeUtc)>(
-                dir,
-                (ref FileSystemEntry entry) =>
-                    (entry.ToFullName(), entry.Length, entry.LastWriteTimeUtc.UtcDateTime.Subtract(DateTime.UnixEpoch).TotalSeconds),
-                options)
-            {
-                ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory
-            };
-
-            return enumerable.ToList();
+            return new DirectoryInfo(dir)
+                .EnumerateFiles("*", options)
+                .Select(f => (f.FullName, f.Length, f.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds))
+                .ToList();
         }
         catch (Exception)
         {
