@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="assets/logo.png" width="128" alt="Episode Tools logo" />
-</p>
 
 # Episode Tools (Jellyfin 12 plugin)
 
