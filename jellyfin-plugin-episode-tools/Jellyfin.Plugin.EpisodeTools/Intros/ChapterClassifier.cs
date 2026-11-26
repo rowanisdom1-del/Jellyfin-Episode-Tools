@@ -194,4 +194,7 @@ internal static class ChapterClassifier
         var outro = wantOutro ? FindOutro(chapters, minDuration, maxDuration, fileDuration) : null;
         return (intro, outro);
     }
+
+    /// <summary>Converts Jellyfin's stored chapter tick positions to seconds.</summary>
+    public static double TicksToSeconds(long ticks) => ticks / (double)TimeSpan.TicksPerSecond;
 }
