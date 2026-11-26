@@ -47,6 +47,39 @@ public class EpisodeToolsReportController : ControllerBase
 
     private static string TrashRoot => Path.Combine(WorkDir, "trash");
 
+    /// <summary>
+    /// True when <paramref name="path"/> sits under one of the configured series/scan
+    /// folders. Restores may only land inside the managed library: the explicit path in
+    /// a restore request must never be able to drop files anywhere else on disk.
+    /// </summary>
+    private static bool IsUnderConfiguredFolder(string path)
+    {
+        var cfg = Plugin.Instance?.Configuration;
+        if (cfg is null)
+        {
+            return false;
+        }
+
+        var allowed = new List<string>(cfg.EffectiveRenameFolders);
+        allowed.AddRange(cfg.EffectiveConvertFolders);
+        foreach (var root in allowed)
+        {
+            if (root.Length == 0)
+            {
+                continue;
+            }
+
+            var prefix = root.TrimEnd('/');
+            if (path.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Group folder names may never carry separators or traversal.</summary>
     private static string SanitizeGroup(string group)
     {
@@ -662,8 +695,10 @@ public class EpisodeToolsReportController : ControllerBase
                 // The bin_data trap: remuxing MP4s must never carry chapter/data tracks
                 // (ExoPlayer refuses to play files that contain them).
                 args.Insert(args.IndexOf("-f"), "-dn");
+                // -map_chapters -1: like the conversion script, remuxing MP4s must never
+                // carry chapter tracks (they are what becomes bin_data for ExoPlayer).
                 args.Insert(args.IndexOf("-f"), "-map_chapters");
-                args.Insert(args.IndexOf("-f"), "0");
+                args.Insert(args.IndexOf("-f"), "-1");
             }
 
             var ffmpeg = FfmpegPath();
@@ -787,6 +822,20 @@ public class EpisodeToolsReportController : ControllerBase
                 {
                     return candidate;
                 }
+
+                // Do not leak a hung --version probe: kill it and try the next candidate.
+                if (!process.HasExited)
+                {
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(2000);
+                    }
+                    catch (Exception)
+                    {
+                        // The process died on its own.
+                    }
+                }
             }
             catch (Exception)
             {
@@ -817,9 +866,14 @@ public class EpisodeToolsReportController : ControllerBase
             throw new InvalidOperationException("Could not start " + executable + ".");
         }
 
-        var stdout = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-        var stderr = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+        // Read both pipes concurrently from the start: a sequential stdout-then-stderr
+        // read deadlocks the moment a tool fills the stderr pipe buffer while stdout is
+        // still being written (classic ffmpeg failure mode).
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync().ConfigureAwait(false);
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
         return (process.ExitCode, (stdout + " " + stderr).Trim());
     }
 
@@ -992,6 +1046,13 @@ public class EpisodeToolsReportController : ControllerBase
         if (System.IO.File.Exists(dest) || Directory.Exists(dest))
         {
             return StatusCode(409, "Restore would overwrite: " + dest + " already exists.");
+        }
+
+        // The manifest is pre-validated, but an explicitly supplied destination is user
+        // input: confine it to the managed library folders.
+        if (!IsUnderConfiguredFolder(dest))
+        {
+            return BadRequest("Restore destination is not under a configured series/scan folder.");
         }
 
         var destDir = Path.GetDirectoryName(dest);
@@ -1177,7 +1238,7 @@ public class EpisodeToolsReportController : ControllerBase
             keep = files.OrderByDescending(f => f.Size).First().Path;
         }
 
-        var trashDir = Path.Combine(baseDir, "trash", key.Replace("|", "_"));
+        var trashDir = Path.Combine(baseDir, "trash", SanitizeGroup(key));
         Directory.CreateDirectory(trashDir);
         var removed = new List<string>();
         var errors = new List<string>();
