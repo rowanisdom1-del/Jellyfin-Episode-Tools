@@ -54,6 +54,14 @@ internal static class ShowConvertRunner
                     _result = "stopped";
                     _lastMessage = "stopped";
                 }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("Another conversion is already running", StringComparison.Ordinal))
+                {
+                    // The convert script's own lock refused this run (a scheduled task or
+                    // another per-show run holds it); that is a conflict, not a failure.
+                    _result = "Another conversion is already running";
+                    _lastMessage = _result;
+                    loggerLocal.LogInformation("[Episode Tools] Per-show conversion skipped: another conversion is already running.");
+                }
                 catch (Exception ex)
                 {
                     _result = "failed: " + ex.Message;

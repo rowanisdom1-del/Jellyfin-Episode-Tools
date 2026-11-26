@@ -224,6 +224,14 @@ if $APPLY && command -v flock >/dev/null 2>&1; then
   fi
 fi
 
+# Without flock there is no cross-run lock; tagging the temp file with this run's PID
+# keeps two concurrent runs from writing the same .part file (the leftover-“.part” skip
+# check then also stays per-run).
+PART_SUFFIX=".part"
+if $APPLY && ! command -v flock >/dev/null 2>&1; then
+  PART_SUFFIX=".part.$$"
+fi
+
 # Run conversions at low priority, so Jellyfin keeps responding when someone is
 # watching while a conversion is running.
 PRIO=()
@@ -236,6 +244,7 @@ fi
 
 CURRENT_TMP=""
 CLEAN_DIR=""
+GARBAGE_DIR=""
 cleanup() {
   if [[ -n "$CURRENT_TMP" ]]; then
     rm -f -- "$CURRENT_TMP"
@@ -243,13 +252,17 @@ cleanup() {
   if [[ -n "${CLEAN_DIR:-}" ]]; then
     rm -rf -- "$CLEAN_DIR"
   fi
+  if [[ -n "${GARBAGE_DIR:-}" ]]; then
+    rm -rf -- "$GARBAGE_DIR"
+  fi
 }
 trap cleanup EXIT
 trap 'echo; echo "Interrupted; cleaning up the unfinished file."; exit 130' INT TERM HUP
 
 # Populated by probe():
 # VCOUNT, VCODECS[], VIDEO_MAPS[], ACOUNT, ACODECS[], AUDIO_MAPS[], ALANGS[],
-# SUBCOUNT, SUB_MAPS[], PIC_SUBS
+# SUBCOUNT, SUB_MAPS[], PIC_SUBS, SRC_DURATION (container duration, captured here so
+# verify() does not have to ffprobe the source a second time)
 #
 # SUBCOUNT counts only text subtitle streams mapped into the MP4.
 probe() {
@@ -258,6 +271,7 @@ probe() {
   ACOUNT=0
   SUBCOUNT=0
   PIC_SUBS=0
+  SRC_DURATION=""
   VCODECS=()
   ACODECS=()
   ACHANNELS=()
@@ -271,7 +285,7 @@ probe() {
   SUB_MAPS=()
 
   out=$(ffprobe -v error \
-    -show_entries stream=index,codec_name,codec_type,channels:stream_tags=language,title:stream_disposition=default \
+    -show_entries stream=index,codec_name,codec_type,channels:stream_tags=language,title:stream_disposition=default:format=duration \
     -of compact=p=0:nk=0 -i "$input" 2>/dev/null) || return 1
   [[ -n "$out" ]] || return 1
 
@@ -283,6 +297,10 @@ probe() {
     language=""
     title=""
 
+    # The format section line (format|duration=...) carries the container duration;
+    # stream lines never contain a duration key, so this cannot misfire.
+    [[ $line =~ duration=([0-9.]+) ]] && SRC_DURATION=${BASH_REMATCH[1]}
+    idx="" ; codec="" ; type="" ; channels="" ; language="" ; title=""
     [[ $line =~ index=([0-9]+) ]] && idx=${BASH_REMATCH[1]}
     [[ $line =~ codec_name=([^|]+) ]] && codec=${BASH_REMATCH[1]}
     [[ $line =~ codec_type=([a-z]+) ]] && type=${BASH_REMATCH[1]}
@@ -358,9 +376,9 @@ enough_space() {
 # Sets REASON and returns nonzero if the output does not pass verification.
 # The local variables keep probe() from overwriting the source-file probe data.
 verify() {
-  local expected_v=$1 expected_a=$2 expected_s=$3 src=$4 new=$5
+  local expected_v=$1 expected_a=$2 expected_s=$3 src_duration=$4 src=$5 new=$6
   local d1 d2 new_size
-  local VCOUNT ACOUNT SUBCOUNT PIC_SUBS ALANGS AUDIO_INDICES SUB_INDICES SLANGS STITLES
+  local VCOUNT ACOUNT SUBCOUNT PIC_SUBS ALANGS AUDIO_INDICES SUB_INDICES SLANGS STITLES SRC_DURATION
   local -a VCODECS ACODECS ACHANNELS VIDEO_MAPS AUDIO_MAPS SUB_MAPS
 
   if [[ ! -s "$new" ]]; then
@@ -386,8 +404,13 @@ verify() {
     return 1
   fi
 
-  d1=$(duration "$src")
-  d2=$(duration "$new")
+  # Durations come from the probes above (the source's was captured with its initial
+  # probe, so the source is NOT probed again here); duration() is only the fallback
+  # for files whose container section ffprobe skipped.
+  d1="$src_duration"
+  [[ -n "$d1" ]] || d1=$(duration "$src")
+  d2="$SRC_DURATION"
+  [[ -n "$d2" ]] || d2=$(duration "$new")
   if ! awk -v a="$d1" -v b="$d2" '
     BEGIN {
       if (a !~ /^[0-9]+([.][0-9]+)?$/ ||
@@ -433,23 +456,37 @@ skipped=0
 failed=0
 total=0
 
-mapfile -d '' -t SRC_FILES < <(
+mapfile -d '' -t SRC_FILES_RAW < <(
   for base in "${FOLDERS[@]}"; do
-    find "$base" -type f -iname '*.mkv' -print0 2>/dev/null
+    # -L follows symlinked episode files and library-view folders so files behind links
+    # are converted too; the realpath dedup below keeps the same file from appearing twice.
+    find -L "$base" -type f -iname '*.mkv' -print0 2>/dev/null
   done
   if $REMUX; then
     for base in "${FOLDERS[@]}"; do
       while IFS= read -r -d '' mp4; do
         # MP4s that still have an MKV source are handled by the normal pass.
-        if find "$(dirname -- "$mp4")" -maxdepth 1 \
+        if find -L "$(dirname -- "$mp4")" -maxdepth 1 \
             -iname "$(basename -- "${mp4%.*}").mkv" -print -quit 2>/dev/null | grep -q .; then
           continue
         fi
         printf '%s\0' "$mp4"
-      done < <(find "$base" -type f -iname '*.mp4' -print0 2>/dev/null)
+      done < <(find -L "$base" -type f -iname '*.mp4' -print0 2>/dev/null)
     done
   fi
 )
+
+# Deduplicate by physical path: a symlinked tree pointing back into the real library
+# would otherwise hand the same file to the loop twice.
+declare -A SEEN_REAL=()
+SRC_FILES=()
+for src_file in "${SRC_FILES_RAW[@]}"; do
+  real=$(realpath -- "$src_file" 2>/dev/null) || real=$src_file
+  [[ -n "${SEEN_REAL[$real]:-}" ]] && continue
+  SEEN_REAL[$real]=1
+  SRC_FILES+=("$src_file")
+done
+unset SRC_FILES_RAW SEEN_REAL real src_file
 for src in "${SRC_FILES[@]}"; do
   total=$((total + 1))
   # MP4 sources (remux-existing mode) replace themselves; MKV sources get a new MP4.
@@ -460,7 +497,7 @@ for src in "${SRC_FILES[@]}"; do
     INPLACE=false
     out="${src%.*}.mp4"
   fi
-  tmp="${out}.part"
+  tmp="${out}${PART_SUFFIX}"
 
   echo
   echo "File: $src"
@@ -610,25 +647,33 @@ for src in "${SRC_FILES[@]}"; do
 
 # ---- drop garbage subtitle tracks (numbers/ads/spam content) ----
 # Uses python3 for the content analysis; without python3 the feature is skipped silently.
+# Every subtitle track is extracted in ONE ffmpeg pass (one read of the file instead of
+# one per track), each into its own output file.
 if $DROP_GARBAGE_SUBS && command -v python3 >/dev/null 2>&1 && (( ${#SUB_INDICES[@]} > 1 )); then
-  garbage_tmp=$(mktemp --suffix=.srt)
-  kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
-  dropped=""
+  GARBAGE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/epgarbage.XXXXXX")
+  garbage_args=()
   for i in "${!SUB_INDICES[@]}"; do
-    # Pathological fansub tracks (one cue per letter, tens of thousands of cues
-    # scattered across a big file) make SRT extraction crawl. Cap it, force-kill
-    # on expiry (timeout -k: ffmpeg can ignore a plain SIGTERM while stuck in a
-    # loop), and skip analysis for the whole file once one track trips the cap.
     # ${SUB_INDICES[$i]} is the real stream index - "0:s:$i" would probe the wrong
     # track whenever an earlier subtitle was filtered out by preferences.
-    timeout -k 15 45 ffmpeg -v error -y -i "$src" -map "0:${SUB_INDICES[$i]}" -f srt "$garbage_tmp" 2>/dev/null
-    rc=$?
-    if (( rc == 124 || rc == 137 )); then
-      echo "  Note: subtitle extraction timed out - skipping garbage analysis, all tracks kept."
-      break
-    fi
-    if (( rc == 0 )); then
-      ratio=$(python3 - "$garbage_tmp" <<'PYEOF'
+    garbage_args+=(-map "0:${SUB_INDICES[$i]}" -f srt "$GARBAGE_DIR/sub$i.srt")
+  done
+  # Pathological fansub tracks (one cue per letter, tens of thousands of cues scattered
+  # across a big file) make SRT extraction crawl. Cap the whole pass, force-kill on
+  # expiry (timeout -k: ffmpeg can ignore a plain SIGTERM while stuck in a loop), and
+  # keep every track when the cap trips.
+  timeout -k 15 60 ffmpeg -v error -y -i "$src" "${garbage_args[@]}" 2>/dev/null
+  rc=$?
+  if (( rc == 124 || rc == 137 )); then
+    echo "  Note: subtitle extraction timed out - skipping garbage analysis, all tracks kept."
+    rm -rf -- "$GARBAGE_DIR"
+    GARBAGE_DIR=""
+  else
+    kept_sub_maps=(); kept_sub_indices=(); kept_sub_langs=(); kept_sub_titles=()
+    dropped=""
+    for i in "${!SUB_INDICES[@]}"; do
+      garbage_tmp="$GARBAGE_DIR/sub$i.srt"
+      if [[ -s "$garbage_tmp" ]]; then
+        ratio=$(python3 - "$garbage_tmp" <<'PYEOF'
 import re, sys
 try:
     text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
@@ -667,31 +712,34 @@ for block in blocks:
 print(f"{bad / cues:.2f}" if cues >= 10 else "OK")
 PYEOF
 )
-      if [[ "$ratio" =~ ^0?\.[3-9]$|^1$|^0\.[3-9][0-9]?$ ]]; then
-        dropped+=" '${STITLES[$i]:-track $i}' (${ratio} garbage)"
+        if [[ "$ratio" =~ ^0?\.[3-9]$|^1$|^0\.[3-9][0-9]?$ ]]; then
+          dropped+=" '${STITLES[$i]:-track $i}' (${ratio} garbage)"
+        else
+          kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
+          kept_sub_indices+=("${SUB_INDICES[$i]}")
+          kept_sub_langs+=("${SLANGS[$i]}")
+          kept_sub_titles+=("${STITLES[$i]:-}")
+        fi
       else
+        # Track could not be extracted (image-based, or ffmpeg failed on it): keep it.
         kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
         kept_sub_indices+=("${SUB_INDICES[$i]}")
         kept_sub_langs+=("${SLANGS[$i]}")
         kept_sub_titles+=("${STITLES[$i]:-}")
       fi
-    else
-      kept_sub_maps+=(-map "0:${SUB_INDICES[$i]}")
-      kept_sub_indices+=("${SUB_INDICES[$i]}")
-      kept_sub_langs+=("${SLANGS[$i]}")
-      kept_sub_titles+=("${STITLES[$i]:-}")
+    done
+    rm -rf -- "$GARBAGE_DIR"
+    GARBAGE_DIR=""
+    if [[ -n "$dropped" ]] && (( ${#kept_sub_maps[@]} > 0 )); then
+      SUB_MAPS=("${kept_sub_maps[@]}")
+      SUB_INDICES=("${kept_sub_indices[@]}")
+      SLANGS=("${kept_sub_langs[@]}")
+      STITLES=("${kept_sub_titles[@]}")
+      SUBCOUNT=${#SUB_INDICES[@]}
+      echo "  Dropping garbage subtitle track(s):$dropped"
+    elif [[ -n "$dropped" ]]; then
+      echo "  Note: every subtitle track looks like garbage; keeping them all."
     fi
-  done
-  rm -f -- "$garbage_tmp"
-  if [[ -n "$dropped" ]] && (( ${#kept_sub_maps[@]} > 0 )); then
-    SUB_MAPS=("${kept_sub_maps[@]}")
-    SUB_INDICES=("${kept_sub_indices[@]}")
-    SLANGS=("${kept_sub_langs[@]}")
-    STITLES=("${kept_sub_titles[@]}")
-    SUBCOUNT=${#SUB_INDICES[@]}
-    echo "  Dropping garbage subtitle track(s):$dropped"
-  elif [[ -n "$dropped" ]]; then
-    echo "  Note: every subtitle track looks like garbage; keeping them all."
   fi
 fi
 
@@ -838,7 +886,7 @@ fi
     continue
   fi
 
-  if ! verify "$VCOUNT" "$ACOUNT" "$SUBCOUNT" "$src" "$tmp"; then
+  if ! verify "$VCOUNT" "$ACOUNT" "$SUBCOUNT" "$SRC_DURATION" "$src" "$tmp"; then
     echo "  Failed verification: $REASON"
     report "$src" "output failed verification: $REASON"
     rm -f -- "$tmp"

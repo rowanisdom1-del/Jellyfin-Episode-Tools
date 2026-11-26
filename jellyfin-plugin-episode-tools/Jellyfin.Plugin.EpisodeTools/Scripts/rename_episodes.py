@@ -137,9 +137,23 @@ def new_name(show, parent_dirs, fname):
     return f"{base}{lang}.{ext}"
 
 
+def fsync_dir(path):
+    """Flushes a directory entry list to storage so a power cut cannot lose the renames
+    (matters on SD cards / USB drives, where ext4 metadata may sit in cache)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def process(series, apply, claimed):
     """Walks one series folder; returns (renamed, skipped, unmatched) for it."""
     renamed = skipped = unmatched = 0
+    dirty_dirs = set()
 
     if not os.path.isdir(series):
         print(f"Folder {series} not found.")
@@ -183,7 +197,12 @@ def process(series, apply, claimed):
             print(f"   -> {wanted}")
             if apply:
                 os.rename(src, dst)
+                dirty_dirs.add(root)
             renamed += 1
+
+    if apply and dirty_dirs:
+        for d in sorted(dirty_dirs):
+            fsync_dir(d)
 
     return renamed, skipped, unmatched
 

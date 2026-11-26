@@ -549,7 +549,18 @@ internal static class IntrosRunner
         }
 
         WriteState();
-        PruneCache(cacheDir, jobs);
+
+        // Cache index: one file mapping every live episode to its cache file name, so
+        // pruning only has to stat-and-unlink dead entries instead of parsing thousands
+        // of JSON files (which was minutes of I/O at the end of scans on huge libraries).
+        var liveCacheFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var job in jobs)
+        {
+            liveCacheFiles.Add(Path.GetFileName(CacheFileFor(cacheDir, job.Path, window)));
+        }
+
+        SaveCacheIndex(cacheDir, liveCacheFiles);
+        PruneCache(cacheDir, liveCacheFiles);
 
         var results2 = found.Values.OrderBy(r => r.Show, StringComparer.OrdinalIgnoreCase).ToList();
         _lastMessage = $"finished: {results2.Count} intro(s) in {jobs.Count} episode(s)";
@@ -726,42 +737,56 @@ internal static class IntrosRunner
         }
     }
 
+    /// <summary>Path of the cache index file that powers parse-free pruning.</summary>
+    private static string CacheIndexPath(string cacheDir) =>
+        Path.Combine(cacheDir, "index.json");
+
     /// <summary>
-    /// Deletes cache entries for files that no longer exist under the configured folders
-    /// (deleted or renamed episodes), so the cache does not grow forever.
+    /// Writes the cache index (one JSON file listing every live episode's cache file).
+    /// Best effort: scanning works without it, pruning just finds nothing to drop.
     /// </summary>
-    private static void PruneCache(string cacheDir, List<Job> jobs)
+    private static void SaveCacheIndex(string cacheDir, IReadOnlyCollection<string> cacheFileNames)
     {
         try
         {
-            var live = new HashSet<string>(
-                jobs.Select(j => j.Path),
-                StringComparer.OrdinalIgnoreCase);
+            var tmp = CacheIndexPath(cacheDir) + ".tmp";
+            File.WriteAllText(
+                tmp,
+                System.Text.Json.JsonSerializer.Serialize(
+                    cacheFileNames.OrderBy(f => f, StringComparer.OrdinalIgnoreCase)));
+            File.Move(tmp, CacheIndexPath(cacheDir), true);
+        }
+        catch (Exception)
+        {
+            // The index only powers pruning; a failed write costs some re-pruning.
+        }
+    }
 
+    /// <summary>
+    /// Deletes cache entries that the index does not list (deleted or renamed episodes,
+    /// corrupt or foreign files), so the cache does not grow forever. Fingerprints are
+    /// recomputed on demand, so deleting can never lose data.
+    /// </summary>
+    private static void PruneCache(string cacheDir, HashSet<string> liveCacheFiles)
+    {
+        try
+        {
             foreach (var cacheFile in Directory.EnumerateFiles(cacheDir, "*.json"))
             {
+                var name = Path.GetFileName(cacheFile);
+                if (string.Equals(name, "index.json", StringComparison.OrdinalIgnoreCase) ||
+                    liveCacheFiles.Contains(name))
+                {
+                    continue;
+                }
+
                 try
                 {
-                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cacheFile));
-                    var cachedPath = doc.RootElement.TryGetProperty("path", out var p)
-                        ? p.GetString()
-                        : null;
-                    if (cachedPath is null || !live.Contains(cachedPath))
-                    {
-                        File.Delete(cacheFile);
-                    }
+                    File.Delete(cacheFile);
                 }
                 catch (Exception)
                 {
-                    // Corrupt entry: drop it so a fresh fingerprint replaces it.
-                    try
-                    {
-                        File.Delete(cacheFile);
-                    }
-                    catch (Exception)
-                    {
-                        // Ignore; it will be retried on the next scan.
-                    }
+                    // Ignore; it will be retried on the next scan.
                 }
             }
         }
