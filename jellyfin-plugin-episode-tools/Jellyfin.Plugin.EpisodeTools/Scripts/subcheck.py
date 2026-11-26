@@ -185,6 +185,173 @@ def find_ffmpeg_tools():
     return tools
 
 
+CACHE_VERSION = 1
+CACHE_MTIME_TOLERANCE = 2  # seconds; SMB/NFS write times can differ slightly
+
+
+def load_cache(cache_file):
+    """Loads the per-file sub check cache; {} on any problem."""
+    if not cache_file:
+        return {}
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("version") == CACHE_VERSION and isinstance(data.get("files"), dict):
+            return data["files"]
+    except Exception:
+        pass
+    return {}
+
+
+def save_cache(cache_file, files):
+    """Writes the cache atomically (tmp + rename); failures are ignored."""
+    if not cache_file:
+        return
+    tmp = cache_file + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": CACHE_VERSION, "files": files}, f)
+        os.replace(tmp, cache_file)
+    except OSError:
+        pass
+
+
+def cache_entry_valid(entry, path):
+    """True when a cached result still matches the file on disk: size + mtime, with the
+    same 2s mtime tolerance the intro fingerprint cache uses for network mounts."""
+    if not isinstance(entry, dict):
+        return False
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return (entry.get("size") == st.st_size
+            and abs(entry.get("mtime", -1e18) - st.st_mtime) <= CACHE_MTIME_TOLERANCE)
+
+
+def check_episode(path, base, files, tools, report_file, emit, rep):
+    """Analyses one video file (embedded tracks + external subs in the same folder).
+
+    Prints nothing directly: stdout lines go through `emit` and report entries through
+    `rep`, so callers can cache and replay unchanged files without re-running
+    ffprobe/ffmpeg. Returns the number of problems found.
+    """
+    problems = 0
+
+    streams = ffprobe_streams(path, tools["ffprobe"])
+    if not streams:
+        emit("  no subtitle streams (or ffprobe failed)")
+        return 0
+
+    text_streams = [s for s in streams]  # image-based tracks are noted during extraction
+    suspicious = [s for s in text_streams if RE_SUSPICIOUS_TITLE.search(" " + (s["title"] or "") + " ")]
+
+    # Describe the tracks.
+    for s in text_streams:
+        flag = "DEFAULT" if s["default"] else ""
+        desc = f"track #{s['index']} [{s['codec']}] lang={s['language'] or 'und'}"
+        if s["title"]:
+            desc += f" title='{s['title']}'"
+        if flag:
+            desc += f" << {flag}"
+        emit(f"  {desc}")
+        rep("SUBINFO", desc)
+
+    # The classic problem: the default track is signs/songs/lyrics.
+    if len(text_streams) > 1:
+        for s in suspicious:
+            if s["default"]:
+                msg = (f"DEFAULT subtitle track looks like a signs/songs/lyrics track "
+                       f"(title='{s['title']}') while {len(text_streams) - 1} other "
+                       f"subtitle track(s) exist — this is why you see lyrics flashing. "
+                       f"Re-convert with 'Drop signs/songs subtitle tracks' enabled "
+                       f"(task 6) to fix.")
+                emit(f"  !! {msg}")
+                rep("SUBWARN", msg)
+                problems += 1
+
+    # Analyse the default track (or the only track).
+    targets = [(idx, s) for idx, s in enumerate(text_streams) if s["default"]]
+    if not targets:
+        targets = [(0, text_streams[0])] if text_streams else []
+    for stream_pos, s in targets:
+        text = extract_subtitle_text(path, stream_pos, tools["ffmpeg"])
+        if text is None:
+            # Image-based (PGS/VobSub) tracks cannot be analysed as text.
+            rep("SUBINFO",
+                f"track #{s['index']} could not be extracted as text (image-based subtitle)")
+            continue
+        cues, musical_ratio, short_ratio, garbage_ratio = analyze_srt_text(text)
+        if cues == 0:
+            rep("SUBINFO",
+                f"track #{s['index']} contains no analysable text (image-based subtitle?)")
+            continue
+        if musical_ratio > 0.4:
+            msg = (f"track #{s['index']} is lyrics-heavy: {int(musical_ratio * 100)}% of "
+                   f"{cues} cues are song lines (♪) — you may be watching the songs track.")
+            emit(f"  !! {msg}")
+            rep("SUBWARN", msg)
+            problems += 1
+        if short_ratio > 0.35:
+            msg = (f"track #{s['index']} has broken-feeling timing: {int(short_ratio * 100)}% of "
+                   f"{cues} cues flash shorter than 0.8s.")
+            emit(f"  !! {msg}")
+            rep("SUBWARN", msg)
+            problems += 1
+        if musical_ratio <= 0.4 and short_ratio <= 0.35 and garbage_ratio > 0.3:
+            msg = (f"track #{s['index']} looks like dialogue but {int(garbage_ratio * 100)}% of "
+                   f"{cues} cues are garbage (numbers/ads/junk) — conversion can drop this "
+                   f"track automatically ('Drop garbage subtitle tracks').")
+            emit(f"  !! {msg}")
+            rep("SUBWARN", msg)
+            problems += 1
+        elif musical_ratio <= 0.4 and short_ratio <= 0.35:
+            msg = f"track #{s['index']} looks like normal dialogue ({cues} cues)."
+            rep("SUBOK", msg)
+
+    # External subtitle files next to / in the same folder.
+    for fname in files:
+        fext = os.path.splitext(fname)[1].lower()
+        if fext not in SUB_EXT:
+            continue
+        fpath = os.path.join(os.path.dirname(path), fname)
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(MAX_EXTRACT_CUES * 400)
+        except OSError:
+            continue
+        if fext == ".srt":
+            cues, musical_ratio, short_ratio, garbage_ratio = analyze_srt_text(content)
+        else:
+            cues, musical_ratio, short_ratio, garbage_ratio = analyze_ass_text(content)
+        if cues == 0:
+            continue
+        rel_sub = os.path.relpath(fpath, base)
+        if garbage_ratio > 0.3:
+            msg = (f"external subtitle is mostly garbage: {int(garbage_ratio * 100)}% of "
+                   f"{cues} cues are numbers/ads/junk: {rel_sub}")
+            emit(f"  !! {msg}")
+            rep("SUBWARN", msg)
+            problems += 1
+        elif musical_ratio > 0.4:
+            msg = (f"external subtitle is lyrics-heavy: {int(musical_ratio * 100)}% of "
+                   f"{cues} cues are song lines (♪): {rel_sub}")
+            emit(f"  !! {msg}")
+            rep("SUBWARN", msg)
+            problems += 1
+        elif short_ratio > 0.35:
+            msg = (f"external subtitle has broken-feeling timing: {int(short_ratio * 100)}% "
+                   f"of {cues} cues shorter than 0.8s: {rel_sub}")
+            emit(f"  !! {msg}")
+            rep("SUBWARN", msg)
+            problems += 1
+        else:
+            rep("SUBOK",
+                f"external subtitle looks like dialogue ({cues} cues): {rel_sub}")
+
+    return problems
+
+
 def main():
     args = sys.argv[1:]
     report_file = ""
@@ -216,6 +383,18 @@ def main():
     if not folders:
         folders = ["/mnt/storage/media"]
 
+    # Per-file result cache, stored next to the report (ScriptRunner always puts the
+    # report in the plugin work folder). Unchanged files cost one stat per run instead
+    # of a full ffprobe + ffmpeg extraction, which is what makes the recurring sweep
+    # cheap on low-power servers. Without a report file (manual CLI runs) caching is off.
+    cache_file = (os.path.join(os.path.dirname(os.path.abspath(report_file)), "subcheck-cache.json")
+                  if report_file else "")
+    cache = load_cache(cache_file)
+    merged = {}
+    for cached_path, entry in cache.items():
+        if os.path.exists(cached_path):
+            merged[cached_path] = entry
+
     checked = 0
     problems = 0
 
@@ -231,122 +410,48 @@ def main():
                     continue
                 path = os.path.join(root, fname)
                 rel = os.path.relpath(path, base)
-                print(f"File: {rel}")
 
-                streams = ffprobe_streams(path, tools["ffprobe"])
-                if not streams:
-                    print("  no subtitle streams (or ffprobe failed)")
+                entry = merged.get(path)
+                if entry is not None and cache_entry_valid(entry, path):
+                    # Replay the cached stdout block and re-emit the report entries: the
+                    # output is identical to a fresh run, only much cheaper.
+                    for line in entry.get("lines", []):
+                        print(line)
+                    for kind, msg in entry.get("reports", []):
+                        report(report_file, kind, path, msg)
+                    problems += entry.get("problems", 0)
                     checked += 1
                     continue
 
-                text_streams = [s for s in streams]  # image-based tracks are noted during extraction
-                suspicious = [s for s in text_streams if RE_SUSPICIOUS_TITLE.search(" " + (s["title"] or "") + " ")]
-                defaults = [s for s in text_streams if s["default"]]
+                print(f"File: {rel}")
+                lines = [f"File: {rel}"]
+                reports = []
 
-                # Describe the tracks.
-                for s in text_streams:
-                    flag = "DEFAULT" if s["default"] else ""
-                    desc = f"track #{s['index']} [{s['codec']}] lang={s['language'] or 'und'}"
-                    if s["title"]:
-                        desc += f" title='{s['title']}'"
-                    if flag:
-                        desc += f" << {flag}"
-                    print(f"  {desc}")
-                    report(report_file, "SUBINFO", path, desc)
+                def emit(msg, _lines=lines):
+                    _lines.append(msg)
+                    print(msg)
 
-                # The classic problem: the default track is signs/songs/lyrics.
-                if len(text_streams) > 1:
-                    for s in suspicious:
-                        if s["default"]:
-                            msg = (f"DEFAULT subtitle track looks like a signs/songs/lyrics track "
-                                   f"(title='{s['title']}') while {len(text_streams) - 1} other "
-                                   f"subtitle track(s) exist — this is why you see lyrics flashing. "
-                                   f"Re-convert with 'Drop signs/songs subtitle tracks' enabled "
-                                   f"(task 6) to fix.")
-                            print(f"  !! {msg}")
-                            report(report_file, "SUBWARN", path, msg)
-                            problems += 1
+                def rep(kind, msg, _reports=reports, _path=path):
+                    report(report_file, kind, _path, msg)
+                    _reports.append((kind, msg))
 
-                # Analyse the default track (or the only track).
-                targets = [(idx, s) for idx, s in enumerate(text_streams) if s["default"]]
-                if not targets:
-                    targets = [(0, text_streams[0])] if text_streams else []
-                for stream_pos, s in targets:
-                    text = extract_subtitle_text(path, stream_pos, tools["ffmpeg"])
-                    if text is None:
-                        # Image-based (PGS/VobSub) tracks cannot be analysed as text.
-                        report(report_file, "SUBINFO", path,
-                               f"track #{s['index']} could not be extracted as text (image-based subtitle)")
-                        continue
-                    cues, musical_ratio, short_ratio, garbage_ratio = analyze_srt_text(text)
-                    if cues == 0:
-                        report(report_file, "SUBINFO", path,
-                               f"track #{s['index']} contains no analysable text (image-based subtitle?)")
-                        continue
-                    if musical_ratio > 0.4:
-                        msg = (f"track #{s['index']} is lyrics-heavy: {int(musical_ratio * 100)}% of "
-                               f"{cues} cues are song lines (♪) — you may be watching the songs track.")
-                        print(f"  !! {msg}")
-                        report(report_file, "SUBWARN", path, msg)
-                        problems += 1
-                    if short_ratio > 0.35:
-                        msg = (f"track #{s['index']} has broken-feeling timing: {int(short_ratio * 100)}% of "
-                               f"{cues} cues flash shorter than 0.8s.")
-                        print(f"  !! {msg}")
-                        report(report_file, "SUBWARN", path, msg)
-                        problems += 1
-                    if musical_ratio <= 0.4 and short_ratio <= 0.35 and garbage_ratio > 0.3:
-                        msg = (f"track #{s['index']} looks like dialogue but {int(garbage_ratio * 100)}% of "
-                               f"{cues} cues are garbage (numbers/ads/junk) — conversion can drop this "
-                               f"track automatically ('Drop garbage subtitle tracks').")
-                        print(f"  !! {msg}")
-                        report(report_file, "SUBWARN", path, msg)
-                        problems += 1
-                    elif musical_ratio <= 0.4 and short_ratio <= 0.35:
-                        msg = f"track #{s['index']} looks like normal dialogue ({cues} cues)."
-                        report(report_file, "SUBOK", path, msg)
-
-                # External subtitle files next to / in the same folder.
-                for fname in files:
-                    fext = os.path.splitext(fname)[1].lower()
-                    if fext not in SUB_EXT:
-                        continue
-                    fpath = os.path.join(root, fname)
-                    try:
-                        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                            content = f.read(MAX_EXTRACT_CUES * 400)
-                    except OSError:
-                        continue
-                    if fext == ".srt":
-                        cues, musical_ratio, short_ratio, garbage_ratio = analyze_srt_text(content)
-                    else:
-                        cues, musical_ratio, short_ratio, garbage_ratio = analyze_ass_text(content)
-                    if cues == 0:
-                        continue
-                    rel_sub = os.path.relpath(fpath, base)
-                    if garbage_ratio > 0.3:
-                        msg = (f"external subtitle is mostly garbage: {int(garbage_ratio * 100)}% of "
-                               f"{cues} cues are numbers/ads/junk: {rel_sub}")
-                        print(f"  !! {msg}")
-                        report(report_file, "SUBWARN", path, msg)
-                        problems += 1
-                    elif musical_ratio > 0.4:
-                        msg = (f"external subtitle is lyrics-heavy: {int(musical_ratio * 100)}% of "
-                               f"{cues} cues are song lines (♪): {rel_sub}")
-                        print(f"  !! {msg}")
-                        report(report_file, "SUBWARN", path, msg)
-                        problems += 1
-                    elif short_ratio > 0.35:
-                        msg = (f"external subtitle has broken-feeling timing: {int(short_ratio * 100)}% "
-                               f"of {cues} cues shorter than 0.8s: {rel_sub}")
-                        print(f"  !! {msg}")
-                        report(report_file, "SUBWARN", path, msg)
-                        problems += 1
-                    else:
-                        report(report_file, "SUBOK", path,
-                               f"external subtitle looks like dialogue ({cues} cues): {rel_sub}")
-
+                p = check_episode(path, base, files, tools, report_file, emit, rep)
+                problems += p
                 checked += 1
+
+                try:
+                    st = os.stat(path)
+                    merged[path] = {
+                        "size": st.st_size,
+                        "mtime": st.st_mtime,
+                        "lines": lines,
+                        "reports": reports,
+                        "problems": p,
+                    }
+                except OSError:
+                    pass
+
+    save_cache(cache_file, merged)
 
     print()
     print(f"Sub check finished: {checked} episode(s) analysed, {problems} problem(s) found.")

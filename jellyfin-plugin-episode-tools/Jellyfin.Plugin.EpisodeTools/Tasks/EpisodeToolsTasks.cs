@@ -174,7 +174,7 @@ public sealed class SubCheckTask : IScheduledTask
     public string Key => "EpisodeToolsSubCheck";
 
     /// <inheritdoc />
-    public string Description => "Analyses the subtitle tracks of every episode: flags signs/songs/lyrics tracks, lyrics-heavy content and broken timing, and warns when the default track is the wrong one. Read the result under Dashboard > Plugins > Episode Tools > Sub Check.";
+    public string Description => "Analyses the subtitle tracks of every episode: flags signs/songs/lyrics tracks, lyrics-heavy content and broken timing, and warns when the default track is the wrong one. Read the result under Dashboard > Plugins > Episode Tools > Sub Check. Runs on demand; add a schedule in Scheduled Tasks if you want automatic re-checks.";
 
     /// <inheritdoc />
     public string Category => "Episode Tools";
@@ -188,11 +188,10 @@ public sealed class SubCheckTask : IScheduledTask
     /// <inheritdoc />
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        // Re-check every 3 days; new episodes added in between get caught automatically.
-        return new[]
-        {
-            new TaskTriggerInfo { Type = TaskTriggerInfoType.IntervalTrigger, IntervalTicks = TimeSpan.FromDays(3).Ticks }
-        };
+        // No automatic schedule. Each run ffprobes and ffmpeg-extracts every episode, which
+        // can hammer a low-power server's disks for a long time; users should opt into a
+        // recurring full-library sweep explicitly (results are cached per file).
+        return Array.Empty<TaskTriggerInfo>();
     }
 }
 
