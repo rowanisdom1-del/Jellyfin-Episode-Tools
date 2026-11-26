@@ -268,6 +268,23 @@ internal static class IntrosRunner
         public string SeasonKey { get; set; } = string.Empty;
 
         public uint[]? Points { get; set; }
+
+        // Staged at enumeration time (one directory listing pass), so every cache check in
+        // the scan validates against these values instead of re-statting the file over
+        // SMB/NFS three times per episode.
+        public long Size { get; set; }
+
+        public double ModifiedUtc { get; set; }
+    }
+
+    /// <summary>One container chapter, already converted to seconds.</summary>
+    internal sealed class ChapterPoint
+    {
+        public double Start { get; set; }
+
+        public double End { get; set; }
+
+        public string Title { get; set; } = string.Empty;
     }
 
     /// <summary>The scan itself.</summary>
@@ -333,10 +350,53 @@ internal static class IntrosRunner
         var cacheDir = Path.Combine(work, "intros-fpcache");
         Directory.CreateDirectory(cacheDir);
 
+        // One metadata probe per file (chapters + duration in a single ffprobe call) with
+        // its own cache: the outro pass reuses the duration instead of running a second
+        // ffprobe per file, and the chapter fast-path reads the chapters straight from here.
+        var meta = new Dictionary<string, (double Duration, List<ChapterPoint> Chapters)>(StringComparer.OrdinalIgnoreCase);
+        var metaMissing = new List<Job>();
+        foreach (var job in jobs)
+        {
+            if (TryLoadMeta(cacheDir, job.Path, job.Size, job.ModifiedUtc, out var m))
+            {
+                meta[job.Path] = m;
+            }
+            else
+            {
+                metaMissing.Add(job);
+            }
+        }
+
+        if (metaMissing.Count > 0)
+        {
+            _lastMessage = $"probing {metaMissing.Count} episode(s)";
+            var metaDone = 0;
+            await Parallel.ForEachAsync(
+                metaMissing,
+                new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = parallelism,
+                    CancellationToken = ct
+                },
+                async (job, token) =>
+                {
+                    var probed = await ProbeMetadataAsync(job.Path, logger, token).ConfigureAwait(false);
+                    if (probed is { } ok)
+                    {
+                        meta[job.Path] = ok;
+                        SaveMeta(cacheDir, job, ok.Duration, ok.Chapters);
+                    }
+
+                    var count = Interlocked.Increment(ref metaDone);
+                    _lastProgress = 50.0 * count / Math.Max(1, metaMissing.Count);
+                    _lastMessage = $"probing {count}/{metaMissing.Count} episode(s)";
+                }).ConfigureAwait(false);
+        }
+
         // Load fingerprints from the cache for everything we already scanned before.
         foreach (var job in jobs)
         {
-            if (TryLoadCached(cacheDir, job.Path, window, out var points))
+            if (TryLoadCached(cacheDir, job.Path, window, job.Size, job.ModifiedUtc, out var points))
             {
                 job.Points = points;
             }
@@ -532,9 +592,12 @@ internal static class IntrosRunner
 
             for (var i = 0; i < queue.Count; i++)
             {
+                // Build the left side's inverted index once per episode and reuse it across
+                // every partner in the inner loop (was: one rebuild per pair).
+                var lhsIndex = BuildIndex(queue[i].Points!);
                 for (var k = i + 1; k < queue.Count; k++)
                 {
-                    var match = CompareEpisodes(queue[i].Points!, queue[k].Points!, minDuration, maxDuration);
+                    var match = CompareEpisodes(queue[i].Points!, lhsIndex, queue[k].Points!, minDuration, maxDuration);
                     if (match is null)
                     {
                         continue;
@@ -610,6 +673,7 @@ internal static class IntrosRunner
         foreach (var job in jobs)
         {
             liveCacheFiles.Add(Path.GetFileName(CacheFileFor(cacheDir, job.Path, window)));
+            liveCacheFiles.Add(Path.GetFileName(MetaCacheFileFor(cacheDir, job.Path)));
         }
 
         SaveCacheIndex(cacheDir, liveCacheFiles);
@@ -619,7 +683,7 @@ internal static class IntrosRunner
         // groups, fingerprinting the last minutes of each file and matching those.
         if (cfg.DetectOutros)
         {
-            await ScanOutrosAsync(cfg, jobs, seasons, cacheDir, minDuration, maxDuration, found, WriteState, logger, ct)
+            await ScanOutrosAsync(cfg, jobs, seasons, cacheDir, meta, minDuration, maxDuration, found, WriteState, logger, ct)
                 .ConfigureAwait(false);
         }
 
@@ -685,27 +749,32 @@ internal static class IntrosRunner
                 var show = Path.GetFileName(dirKey);
                 foreach (var file in SafeEnumerateFiles(dirKey, options))
                 {
-                    var ext = Path.GetExtension(file);
-                    if (!videoExt.Contains(ext) || !seenFiles.Add(file))
+                    var ext = Path.GetExtension(file.Path);
+                    if (!videoExt.Contains(ext) || !seenFiles.Add(file.Path))
                     {
                         continue;
                     }
 
-                    var name = Path.GetFileName(file);
+                    var name = Path.GetFileName(file.Path);
                     var m = SeasonRegex.Match(name);
                     var season = m.Success ? $"S{int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture):00}" : "S?";
 
                     // Compare only within the file's own directory: episodes of one season
                     // live in one folder, and this keeps merged/cross-show groups (whole NAS
                     // shares enumerated as a single show) from producing O(n^2) garbage work.
-                    var seasonKey = Path.GetDirectoryName(file) + "|" + season;
+                    var seasonKey = Path.GetDirectoryName(file.Path) + "|" + season;
 
                     jobs.Add(new Job
                     {
-                        Path = file,
+                        Path = file.Path,
                         Show = show,
                         Season = season,
-                        SeasonKey = seasonKey
+                        SeasonKey = seasonKey,
+
+                        // Size/mtime come from the same directory enumeration (no extra
+                        // SMB/NFS round trip) and back every cache validation below.
+                        Size = file.Size,
+                        ModifiedUtc = file.MtimeUtc
                     });
                 }
             }
@@ -714,15 +783,29 @@ internal static class IntrosRunner
         return jobs;
     }
 
-    private static IEnumerable<string> SafeEnumerateFiles(string dir, EnumerationOptions options)
+    /// <summary>
+    /// Enumerates video files with their size and mtime in the same directory listing pass
+    /// (FileSystemEnumerable reads the dirent metadata, so no extra per-file stat is needed
+    /// on SMB/NFS mounts).
+    /// </summary>
+    private static IEnumerable<(string Path, long Size, double MtimeUtc)> SafeEnumerateFiles(string dir, EnumerationOptions options)
     {
         try
         {
-            return Directory.EnumerateFiles(dir, "*", options);
+            var enumerable = new FileSystemEnumerable<(string Path, long Size, double MtimeUtc)>(
+                dir,
+                (ref FileSystemEntry entry) =>
+                    (entry.ToFullName(), entry.Length, entry.LastWriteTimeUtc.UtcDateTime.Subtract(DateTime.UnixEpoch).TotalSeconds),
+                options)
+            {
+                ShouldIncludePredicate = (ref FileSystemEntry entry) => !entry.IsDirectory
+            };
+
+            return enumerable.ToList();
         }
         catch (Exception)
         {
-            return Array.Empty<string>();
+            return Array.Empty<(string Path, long Size, double MtimeUtc)>();
         }
     }
 
@@ -740,7 +823,8 @@ internal static class IntrosRunner
         return Path.Combine(cacheDir, hash + ".json");
     }
 
-    private static bool TryLoadCached(string cacheDir, string path, int window, out uint[] points)
+    private static bool TryLoadCached(
+        string cacheDir, string path, int window, long size, double mtimeUtc, out uint[] points)
     {
         points = Array.Empty<uint>();
         try
@@ -751,12 +835,11 @@ internal static class IntrosRunner
                 return false;
             }
 
-            var info = new FileInfo(path);
             using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cacheFile));
             var root = doc.RootElement;
-            var size = root.GetProperty("size").GetInt64();
-            var mtime = root.GetProperty("mtime").GetDouble();
-            if (size != info.Length || Math.Abs(mtime - info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds) > 2)
+            var cachedSize = root.GetProperty("size").GetInt64();
+            var cachedMtime = root.GetProperty("mtime").GetDouble();
+            if (cachedSize != size || Math.Abs(cachedMtime - mtimeUtc) > 2)
             {
                 return false;
             }
@@ -781,7 +864,6 @@ internal static class IntrosRunner
     {
         try
         {
-            var info = new FileInfo(job.Path);
             var bytes = new byte[job.Points!.Length * 4];
             for (var i = 0; i < job.Points.Length; i++)
             {
@@ -791,8 +873,8 @@ internal static class IntrosRunner
             var payload = System.Text.Json.JsonSerializer.Serialize(new
             {
                 path = job.Path,
-                size = info.Length,
-                mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds,
+                size = job.Size,
+                mtime = job.ModifiedUtc,
                 points = Convert.ToBase64String(bytes)
             });
             File.WriteAllText(CacheFileFor(cacheDir, job.Path, window), payload);
@@ -869,6 +951,8 @@ internal static class IntrosRunner
         {
             "-hide_banner", "-loglevel", "warning",
             "-t", windowSeconds.ToString(CultureInfo.InvariantCulture),
+            "-vn", "-sn", "-dn",
+            "-map", "0:a:0",
             "-i", path,
             "-ac", "2",
             "-f", "chromaprint",
@@ -1033,9 +1117,9 @@ internal static class IntrosRunner
     // ------------------------------------------------------------------ comparison (ported)
 
     private static (double Start, double End)? CompareEpisodes(
-        uint[] lhs, uint[] rhs, int minIntroDuration, int maxIntroDuration)
+        uint[] lhs, Dictionary<uint, int> lhsIndex, uint[] rhs, int minIntroDuration, int maxIntroDuration)
     {
-        var ranges = SearchInvertedIndex(lhs, rhs);
+        var ranges = SearchInvertedIndex(lhs, lhsIndex, rhs);
         TimeRange? best = null;
 
         foreach (var range in ranges)
@@ -1071,19 +1155,24 @@ internal static class IntrosRunner
         return (start, end);
     }
 
-    private static List<TimeRange> SearchInvertedIndex(uint[] lhs, uint[] rhs)
+    /// <summary>
+    /// Builds the value→last-position inverted index for a fingerprint. Built once per left
+    /// episode in the O(n²) pairing loop and reused for every partner.
+    /// </summary>
+    private static Dictionary<uint, int> BuildIndex(uint[] fingerprint)
     {
-        var lhsIndex = new Dictionary<uint, int>();
-        for (var i = 0; i < lhs.Length; i++)
+        var index = new Dictionary<uint, int>();
+        for (var i = 0; i < fingerprint.Length; i++)
         {
-            lhsIndex[lhs[i]] = i;
+            index[fingerprint[i]] = i;
         }
 
-        var rhsIndex = new Dictionary<uint, int>();
-        for (var i = 0; i < rhs.Length; i++)
-        {
-            rhsIndex[rhs[i]] = i;
-        }
+        return index;
+    }
+
+    private static List<TimeRange> SearchInvertedIndex(uint[] lhs, Dictionary<uint, int> lhsIndex, uint[] rhs)
+    {
+        var rhsIndex = BuildIndex(rhs);
 
         const int indexShift = 2;
         var shifts = new HashSet<int>();
@@ -1310,7 +1399,7 @@ internal static class IntrosRunner
         CacheFileFor(cacheDir, path, window, "outro");
 
     private static bool TryLoadCachedOutro(
-        string cacheDir, string path, int window, out (uint[] Points, double Duration) cached)
+        string cacheDir, string path, int window, long size, double mtimeUtc, out (uint[] Points, double Duration) cached)
     {
         cached = (Array.Empty<uint>(), 0);
         try
@@ -1321,13 +1410,11 @@ internal static class IntrosRunner
                 return false;
             }
 
-            var info = new FileInfo(path);
             using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cacheFile));
             var root = doc.RootElement;
-            var size = root.GetProperty("size").GetInt64();
-            var mtime = root.GetProperty("mtime").GetDouble();
-            if (size != info.Length ||
-                Math.Abs(mtime - info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds) > 2)
+            var cachedSize = root.GetProperty("size").GetInt64();
+            var cachedMtime = root.GetProperty("mtime").GetDouble();
+            if (cachedSize != size || Math.Abs(cachedMtime - mtimeUtc) > 2)
             {
                 return false;
             }
@@ -1365,7 +1452,6 @@ internal static class IntrosRunner
     {
         try
         {
-            var info = new FileInfo(job.Path);
             var bytes = new byte[points.Length * 4];
             for (var i = 0; i < points.Length; i++)
             {
@@ -1375,8 +1461,8 @@ internal static class IntrosRunner
             var payload = System.Text.Json.JsonSerializer.Serialize(new
             {
                 path = job.Path,
-                size = info.Length,
-                mtime = info.LastWriteTimeUtc.Subtract(DateTime.UnixEpoch).TotalSeconds,
+                size = job.Size,
+                mtime = job.ModifiedUtc,
                 duration,
                 points = Convert.ToBase64String(bytes)
             });
@@ -1414,34 +1500,159 @@ internal static class IntrosRunner
         return "ffprobe";
     }
 
-    private static async Task<double> ProbeDurationAsync(string path, ILogger logger, CancellationToken ct)
-    {
-        var args = new[]
-        {
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "csv=p=0",
-            path
-        };
+    /// <summary>Path of the per-file metadata cache entry (chapters + duration).</summary>
+    private static string MetaCacheFileFor(string cacheDir, string path) =>
+        CacheFileFor(cacheDir, path, 0, "meta");
 
-        var raw = Encoding.UTF8.GetString(
-            await RunProcessAsync(FfprobePath(), args, false, logger, ct).ConfigureAwait(false));
-        return double.TryParse(raw.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var duration)
-            ? duration
-            : 0;
+    private static bool TryLoadMeta(
+        string cacheDir,
+        string path,
+        long size,
+        double mtimeUtc,
+        out (double Duration, List<ChapterPoint> Chapters) meta)
+    {
+        meta = (0, new List<ChapterPoint>());
+        try
+        {
+            var cacheFile = MetaCacheFileFor(cacheDir, path);
+            if (!File.Exists(cacheFile))
+            {
+                return false;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cacheFile));
+            var root = doc.RootElement;
+            if (root.GetProperty("size").GetInt64() != size ||
+                Math.Abs(root.GetProperty("mtime").GetDouble() - mtimeUtc) > 2)
+            {
+                return false;
+            }
+
+            var duration = root.TryGetProperty("duration", out var d) ? d.GetDouble() : 0;
+            var chapters = new List<ChapterPoint>();
+            if (root.TryGetProperty("chapters", out var arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var c in arr.EnumerateArray())
+                {
+                    chapters.Add(new ChapterPoint
+                    {
+                        Start = c.GetProperty("s").GetDouble(),
+                        End = c.GetProperty("e").GetDouble(),
+                        Title = c.TryGetProperty("t", out var t) ? (t.GetString() ?? string.Empty) : string.Empty
+                    });
+                }
+            }
+
+            meta = (duration, chapters);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static void SaveMeta(
+        string cacheDir, Job job, double duration, List<ChapterPoint> chapters)
+    {
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                path = job.Path,
+                size = job.Size,
+                mtime = job.ModifiedUtc,
+                duration,
+                chapters = chapters.Select(c => new { s = c.Start, e = c.End, t = c.Title }).ToList()
+            });
+            File.WriteAllText(MetaCacheFileFor(cacheDir, job.Path), payload);
+        }
+        catch (Exception)
+        {
+            // Caching is best effort.
+        }
+    }
+
+    /// <summary>
+    /// Probes chapters and duration with a single ffprobe call. Returns null when the file
+    /// could not be probed at all (the scanner then treats it as chapterless and the outro
+    /// pass skips it, matching the old per-pass behavior).
+    /// </summary>
+    private static async Task<(double Duration, List<ChapterPoint> Chapters)?> ProbeMetadataAsync(
+        string path, ILogger logger, CancellationToken ct)
+    {
+        try
+        {
+            var args = new[]
+            {
+                "-v", "error",
+                "-show_chapters",
+                "-show_entries", "format=duration",
+                "-of", "json",
+                path
+            };
+
+            var raw = Encoding.UTF8.GetString(
+                await RunProcessAsync(FfprobePath(), args, false, logger, ct).ConfigureAwait(false));
+            using var doc = System.Text.Json.JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+
+            double duration = 0;
+            if (root.TryGetProperty("format", out var format) &&
+                format.TryGetProperty("duration", out var dur) &&
+                !double.TryParse(dur.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out duration))
+            {
+                duration = 0;
+            }
+
+            var chapters = new List<ChapterPoint>();
+            if (root.TryGetProperty("chapters", out var arr) && arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var c in arr.EnumerateArray())
+                {
+                    // start_time/end_time are the human-seconds variants ffprobe prints for
+                    // chapters; the raw start/end fields are in the (variable) timebase.
+                    if (!c.TryGetProperty("start_time", out var st) ||
+                        !c.TryGetProperty("end_time", out var et) ||
+                        !double.TryParse(st.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var start) ||
+                        !double.TryParse(et.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var end))
+                    {
+                        continue;
+                    }
+
+                    var title = string.Empty;
+                    if (c.TryGetProperty("tags", out var tags) && tags.TryGetProperty("title", out var t))
+                    {
+                        title = t.GetString() ?? string.Empty;
+                    }
+
+                    chapters.Add(new ChapterPoint { Start = start, End = end, Title = title });
+                }
+            }
+
+            return (duration, chapters);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[Episode Tools] metadata probe failed for \"{Path}\".", path);
+            return null;
+        }
     }
 
     /// <summary>
     /// Fingerprints the last <paramref name="windowSeconds"/> seconds of an episode
-    /// (outro/credits live at the end). Returns the points plus the file duration, which
-    /// converts relative point indices into absolute seconds.
+    /// (outro/credits live at the end). The file duration comes from the shared metadata
+    /// probe (no second ffprobe here) and converts relative point indices into seconds.
     /// </summary>
     private static async Task<(uint[] Points, double Duration)?> FingerprintOutroAsync(
-        string path, int windowSeconds, ILogger logger, CancellationToken ct)
+        string path, int windowSeconds, double duration, ILogger logger, CancellationToken ct)
     {
         try
         {
-            var duration = await ProbeDurationAsync(path, logger, ct).ConfigureAwait(false);
             if (duration <= 0)
             {
                 logger.LogWarning(
@@ -1456,6 +1667,8 @@ internal static class IntrosRunner
                 "-sseof", "-" + windowSeconds.ToString(CultureInfo.InvariantCulture),
                 "-i", path,
                 "-t", windowSeconds.ToString(CultureInfo.InvariantCulture),
+                "-vn", "-sn", "-dn",
+                "-map", "0:a:0",
                 "-ac", "2",
                 "-f", "chromaprint",
                 "-fp_format", "raw",
@@ -1502,6 +1715,7 @@ internal static class IntrosRunner
         List<Job> jobs,
         List<IGrouping<string, Job>> seasons,
         string introCacheDir,
+        Dictionary<string, (double Duration, List<ChapterPoint> Chapters)> meta,
         int minDuration,
         int maxDuration,
         Dictionary<string, IntroResult> found,
@@ -1521,16 +1735,28 @@ internal static class IntrosRunner
 
         var points = new Dictionary<string, (uint[] Points, double Duration)>(StringComparer.OrdinalIgnoreCase);
         var missing = new List<Job>();
+        var noDuration = 0;
         foreach (var job in jobs)
         {
-            if (TryLoadCachedOutro(cacheDir, job.Path, window, out var cached))
+            if (TryLoadCachedOutro(cacheDir, job.Path, window, job.Size, job.ModifiedUtc, out var cached))
             {
                 points[job.Path] = cached;
             }
-            else
+            else if (meta.TryGetValue(job.Path, out var m) && m.Duration > 0)
             {
                 missing.Add(job);
             }
+            else
+            {
+                noDuration++;
+            }
+        }
+
+        if (noDuration > 0)
+        {
+            logger.LogInformation(
+                "[Episode Tools] Outro scan: skipping {Count} episode(s) whose duration could not be read.",
+                noDuration);
         }
 
         var totalMissing = missing.Count;
@@ -1547,7 +1773,8 @@ internal static class IntrosRunner
                 },
                 async (job, token) =>
                 {
-                    var res = await FingerprintOutroAsync(job.Path, window, logger, token).ConfigureAwait(false);
+                    var duration = meta.TryGetValue(job.Path, out var m) ? m.Duration : 0;
+                    var res = await FingerprintOutroAsync(job.Path, window, duration, logger, token).ConfigureAwait(false);
                     if (res is { } r)
                     {
                         points[job.Path] = r;
@@ -1579,9 +1806,11 @@ internal static class IntrosRunner
             var bounds = new Dictionary<string, (double Start, double End)>(StringComparer.OrdinalIgnoreCase);
             for (var i = 0; i < queue.Count; i++)
             {
+                // One inverted index per left episode, reused across the whole inner loop.
+                var lhsIndex = BuildIndex(queue[i].Points!);
                 for (var k = i + 1; k < queue.Count; k++)
                 {
-                    var match = CompareEpisodes(queue[i].Points!, queue[k].Points!, minDuration, maxDuration);
+                    var match = CompareEpisodes(queue[i].Points!, lhsIndex, queue[k].Points!, minDuration, maxDuration);
                     if (match is null)
                     {
                         continue;
