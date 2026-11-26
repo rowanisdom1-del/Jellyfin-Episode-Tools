@@ -91,12 +91,12 @@ public class EpisodeToolsReportController : ControllerBase
         var stem = Path.GetFileNameWithoutExtension(fileName);
         var ext = Path.GetExtension(fileName);
         var dest = Path.Combine(trashDir, fileName);
-        for (var n = 1; File.Exists(dest); n++)
+        for (var n = 1; System.IO.File.Exists(dest); n++)
         {
             dest = Path.Combine(trashDir, stem + "_" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + ext);
         }
 
-        File.Move(sourcePath, dest);
+        System.IO.File.Move(sourcePath, dest);
 
         var entry = new TrashEntry
         {
@@ -109,9 +109,9 @@ public class EpisodeToolsReportController : ControllerBase
         var entries = new List<TrashEntry>();
         try
         {
-            if (File.Exists(ManifestPathFor(trashDir)))
+            if (System.IO.File.Exists(ManifestPathFor(trashDir)))
             {
-                entries = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(trashDir)))
+                entries = JsonSerializer.Deserialize<List<TrashEntry>>(System.IO.File.ReadAllText(ManifestPathFor(trashDir)))
                     ?? new List<TrashEntry>();
             }
         }
@@ -124,8 +124,8 @@ public class EpisodeToolsReportController : ControllerBase
         try
         {
             var tmp = ManifestPathFor(trashDir) + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
-            File.Move(tmp, ManifestPathFor(trashDir), true);
+            System.IO.File.WriteAllText(tmp, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+            System.IO.File.Move(tmp, ManifestPathFor(trashDir), true);
         }
         catch (Exception)
         {
@@ -845,9 +845,9 @@ public class EpisodeToolsReportController : ControllerBase
                 var manifest = new List<TrashEntry>();
                 try
                 {
-                    if (File.Exists(ManifestPathFor(dir)))
+                    if (System.IO.File.Exists(ManifestPathFor(dir)))
                     {
-                        manifest = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(dir)))
+                        manifest = JsonSerializer.Deserialize<List<TrashEntry>>(System.IO.File.ReadAllText(ManifestPathFor(dir)))
                             ?? new List<TrashEntry>();
                     }
                 }
@@ -924,7 +924,7 @@ public class EpisodeToolsReportController : ControllerBase
             // Fall back to the manifest's original path.
             try
             {
-                var manifest = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(trashDir)));
+                var manifest = JsonSerializer.Deserialize<List<TrashEntry>>(System.IO.File.ReadAllText(ManifestPathFor(trashDir)));
                 dest = manifest?.FirstOrDefault(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase))?.OriginalPath ?? string.Empty;
             }
             catch (Exception)
@@ -962,12 +962,12 @@ public class EpisodeToolsReportController : ControllerBase
         // Drop the manifest entry so the listing stays truthful.
         try
         {
-            var manifest = JsonSerializer.Deserialize<List<TrashEntry>>(File.ReadAllText(ManifestPathFor(trashDir)))
+            var manifest = JsonSerializer.Deserialize<List<TrashEntry>>(System.IO.File.ReadAllText(ManifestPathFor(trashDir)))
                 ?? new List<TrashEntry>();
             var remaining = manifest.Where(e => !string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
             var tmp = ManifestPathFor(trashDir) + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(remaining, new JsonSerializerOptions { WriteIndented = true }));
-            File.Move(tmp, ManifestPathFor(trashDir), true);
+            System.IO.File.WriteAllText(tmp, JsonSerializer.Serialize(remaining, new JsonSerializerOptions { WriteIndented = true }));
+            System.IO.File.Move(tmp, ManifestPathFor(trashDir), true);
         }
         catch (Exception)
         {
