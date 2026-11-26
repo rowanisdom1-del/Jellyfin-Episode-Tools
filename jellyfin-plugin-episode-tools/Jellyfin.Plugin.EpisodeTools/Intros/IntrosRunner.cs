@@ -41,6 +41,19 @@ public sealed class IntroResult
 
     /// <summary>Gets or sets the detected outro/credits end (seconds), or null when none.</summary>
     public double? OutroEnd { get; set; }
+
+    /// <summary>
+    /// Where this intro came from: "override", "chapter", "fingerprint" or "skipped"
+    /// (no usable segment; Detail carries the reason). Null in results written by older
+    /// plugin versions — the UI treats null as "fingerprint".
+    /// </summary>
+    public string? Source { get; set; }
+
+    /// <summary>
+    /// Human-readable provenance, e.g. Chapter: "OP", Fingerprint (11/12), Override, or
+    /// the skip reason. Null when unknown.
+    /// </summary>
+    public string? Detail { get; set; }
 }
 
 /// <summary>
@@ -67,8 +80,12 @@ internal static class IntrosRunner
     private static string _lastMessage = string.Empty;
     private static double _lastProgress;
 
-    /// <summary>Starts a scan. Returns false when one is already running.</summary>
-    public static bool TryStart(ILogger logger)
+    /// <summary>
+    /// Starts a scan. Returns false when one is already running. When
+    /// <paramref name="showFilter"/> is set, only episodes of that show (folder leaf name,
+    /// case-insensitive) are scanned — used by the Intros tab's per-show rescan.
+    /// </summary>
+    public static bool TryStart(ILogger logger, string? showFilter = null)
     {
         lock (Lock)
         {
@@ -86,7 +103,7 @@ internal static class IntrosRunner
                 {
                     try
                     {
-                        await RunAsync(logger, ct).ConfigureAwait(false);
+                        await RunAsync(logger, ct, showFilter).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
@@ -244,7 +261,9 @@ internal static class IntrosRunner
 
     internal sealed class IntrosState
     {
-        public int Version { get; set; } = 1;
+        // Version 2 adds per-entry Source/Detail provenance; deserialization is tolerant,
+        // so v1 files (null Source) still load and are shown as fingerprints.
+        public int Version { get; set; } = 2;
 
         public DateTime ScannedAt { get; set; }
 
@@ -288,7 +307,7 @@ internal static class IntrosRunner
     }
 
     /// <summary>The scan itself.</summary>
-    private static async Task RunAsync(ILogger logger, CancellationToken ct)
+    private static async Task RunAsync(ILogger logger, CancellationToken ct, string? showFilter = null)
     {
         var cfg = Plugin.Instance?.Configuration;
         var work = Plugin.Instance?.WorkFolder;
@@ -314,6 +333,26 @@ internal static class IntrosRunner
 
         // Every video file under every configured show folder, grouped per (show folder, season).
         var jobs = EnumerateJobs(folders);
+
+        // Per-show rescan (Intros tab): restrict the scan to one show's episodes. The show
+        // name is matched case-insensitively against the enumerated folder leaf names, so
+        // no path traversal is possible and all seasons of the show are covered.
+        if (!string.IsNullOrWhiteSpace(showFilter))
+        {
+            var filter = showFilter.Trim();
+            var beforeFilter = jobs.Count;
+            jobs = jobs.Where(j => string.Equals(j.Show, filter, StringComparison.OrdinalIgnoreCase)).ToList();
+            logger.LogInformation(
+                "[Episode Tools] Intro scan: per-show filter \"{Show}\" keeps {Count} of {Before} episode(s).",
+                filter,
+                jobs.Count,
+                beforeFilter);
+            if (jobs.Count == 0)
+            {
+                _lastMessage = $"no episodes found for show \"{filter}\"";
+                return;
+            }
+        }
 
         // Per-show opt-out from the Shows tab: shows with IntroScanEnabled=false (single
         // specials, short-form content) are excluded before anything is fingerprinted.
@@ -427,7 +466,9 @@ internal static class IntrosRunner
                     Show = job.Show,
                     Season = job.Season,
                     Start = Math.Round(ov.Start, 2),
-                    End = Math.Round(ov.End, 2)
+                    End = Math.Round(ov.End, 2),
+                    Source = "override",
+                    Detail = "Override"
                 };
             }
         }
@@ -462,7 +503,9 @@ internal static class IntrosRunner
                     Show = job.Show,
                     Season = job.Season,
                     Start = win.Start,
-                    End = win.End
+                    End = win.End,
+                    Source = "chapter",
+                    Detail = $"Chapter: \"{win.Label}\""
                 };
             }
 
@@ -610,6 +653,17 @@ internal static class IntrosRunner
                     {
                         found[j.Path] = ci;
                     }
+                    else if (found.TryGetValue(j.Path, out var seeded))
+                    {
+                        // A previous scan already produced this result; keep it instead of
+                        // marking the episode skipped.
+                    }
+                    else
+                    {
+                        // Skipped diagnostics: make the reason visible instead of the file
+                        // being silently absent from the Intros tab.
+                        found[j.Path] = SkippedResult(j, "Skipped: needs 2+ episodes for matching");
+                    }
                 }
 
                 continue;
@@ -720,7 +774,9 @@ internal static class IntrosRunner
                             Show = item.Job.Show,
                             Season = item.Job.Season,
                             Start = Math.Round(b.Start, 2),
-                            End = Math.Round(end, 2)
+                            End = Math.Round(end, 2),
+                            Source = "fingerprint",
+                            Detail = $"Fingerprint ({b.Agree}/{b.Total})"
                         };
                     }).ConfigureAwait(false);
 
@@ -728,6 +784,28 @@ internal static class IntrosRunner
                 {
                     found[kvp.Key] = kvp.Value;
                 }
+            }
+
+            // Skipped diagnostics: everything that went through the fresh pipeline without
+            // a result gets a tombstone entry with the exact reason, so the Intros tab can
+            // show why an episode has no skip button.
+            foreach (var j in season)
+            {
+                if (overrideMap.ContainsKey(j.Path) || chapterIntro.ContainsKey(j.Path) || found.ContainsKey(j.Path))
+                {
+                    continue;
+                }
+
+                found[j.Path] = new IntroResult
+                {
+                    File = j.Path,
+                    Show = j.Show,
+                    Season = j.Season,
+                    Source = "skipped",
+                    Detail = j.Points is { Length: > 0 }
+                        ? "Skipped: no match (pairing)"
+                        : "Skipped: fingerprint failed"
+                };
             }
 
             WriteState();
@@ -2146,7 +2224,7 @@ internal static class IntrosRunner
         {
             if (chapterOutro.TryGetValue(job.Path, out var co))
             {
-                StampOutro(found, job, co.Start, co.End);
+                StampOutro(found, job, co.Start, co.End, "chapter", $"Chapter: \"{co.Label}\"");
             }
         }
 
@@ -2231,7 +2309,9 @@ internal static class IntrosRunner
                         Show = entry.Show,
                         Season = entry.Season,
                         Start = entry.Start,
-                        End = entry.End
+                        End = entry.End,
+                        Source = entry.Source,
+                        Detail = entry.Detail
                     };
                 }
             }
@@ -2287,7 +2367,14 @@ internal static class IntrosRunner
 
             foreach (var kvp in matched)
             {
-                StampOutro(found, kvp.Value.Job, kvp.Value.Start, kvp.Value.End);
+                var bound = bounds.TryGetValue(kvp.Value.Job.Path, out var bb) ? bb : null;
+                StampOutro(
+                    found,
+                    kvp.Value.Job,
+                    kvp.Value.Start,
+                    kvp.Value.End,
+                    "fingerprint",
+                    bound is null ? null : $"Fingerprint ({bound.Agree}/{bound.Total})");
             }
 
             writeState();
@@ -2318,23 +2405,40 @@ internal static class IntrosRunner
             outroCount);
     }
 
+    /// <summary>Tombstone entry marking an episode that produced no usable segment.</summary>
+    private static IntroResult SkippedResult(Job job, string reason) => new()
+    {
+        File = job.Path,
+        Show = job.Show,
+        Season = job.Season,
+        Source = "skipped",
+        Detail = reason
+    };
+
     /// <summary>
     /// Writes one outro (from chapters or from pairing) into the results, preserving the
-    /// intro bounds the intro pass found for the same file.
+    /// intro bounds the intro pass found for the same file. A tombstone (skipped intro)
+    /// is replaced by the outro's own provenance.
     /// </summary>
     private static void StampOutro(
-        Dictionary<string, IntroResult> found, Job job, double start, double end)
+        Dictionary<string, IntroResult> found,
+        Job job,
+        double start,
+        double end,
+        string? source,
+        string? detail)
     {
-        var baseResult = found.TryGetValue(job.Path, out var existing)
-            ? existing
-            : new IntroResult { File = job.Path, Show = job.Show, Season = job.Season };
+        var baseResult = found.TryGetValue(job.Path, out var existing) ? existing : null;
+        var keepBase = baseResult is not null && baseResult.Source != "skipped";
         found[job.Path] = new IntroResult
         {
             File = job.Path,
             Show = job.Show,
             Season = job.Season,
-            Start = baseResult.Start,
-            End = baseResult.End,
+            Start = keepBase ? baseResult!.Start : 0,
+            End = keepBase ? baseResult!.End : 0,
+            Source = keepBase ? baseResult!.Source : source,
+            Detail = keepBase ? baseResult!.Detail : detail,
             OutroStart = Math.Round(start, 2),
             OutroEnd = Math.Round(end, 2)
         };

@@ -867,13 +867,14 @@
                                             <th>Season</th>
                                             <th style="text-align:left;">Episode file</th>
                                             <th>Intro</th>
-                                            <th>Outro</th>
                                             <th>Length</th>
+                                            <th>Outro</th>
+                                            <th>Source</th>
                                             <th style="text-align:left;">Override</th>
                                         </tr>
                                     </thead>
                                     <tbody id="IntrosBody">
-                                        <tr><td colspan="7">Loading…</td></tr>
+                                        <tr><td colspan="8">Loading…</td></tr>
                                     </tbody>
                                 </table>
                                 <div class="epInfoLine" style="margin-top:1em;">
@@ -1862,17 +1863,58 @@
                         } else {
                             lastIntros = intros;
                         }
-                        var infoText = intros.length + ' intro(s) found';
+                        var infoText = '';
+                        var activeIntros = intros.filter(function (r) { return (r.source || 'fingerprint') !== 'skipped'; }).length;
+                        var skippedIntros = intros.length - activeIntros;
+                        infoText = activeIntros + ' intro(s) found';
+                        if (skippedIntros > 0) { infoText += ' (' + skippedIntros + ' skipped — see the red rows)'; }
                         if (scan.running) {
                             infoText += ' — scanning; the full list loads when the scan finishes';
                         } else if (st.scannedAt) {
                             infoText += ' — latest scan: ' + String(st.scannedAt).replace('T', ' ').replace('Z', ' UTC');
                         }
                         document.querySelector('#IntrosInfo').textContent = infoText;
+                        var lastShownShow = null;
+                        var sourceStyles = {
+                            override: 'background:#6a1b9a;color:#fff;',
+                            chapter: 'background:#1b5e20;color:#fff;',
+                            skipped: 'background:#b71c1c;color:#fff;',
+                            fingerprint: 'border:1px solid rgba(128,128,128,.4);'
+                        };
                         intros.forEach(function (r) {
                             var tr = document.createElement('tr');
+                            var source = r.source || 'fingerprint';
+                            if (source === 'skipped') { tr.style.opacity = '0.55'; }
                             var tdShow = document.createElement('td');
                             tdShow.textContent = r.show;
+                            if (r.show && r.show !== lastShownShow && !scan.running) {
+                                lastShownShow = r.show;
+                                var scanShowBtn = document.createElement('button');
+                                scanShowBtn.setAttribute('is', 'emby-button');
+                                scanShowBtn.setAttribute('type', 'button');
+                                scanShowBtn.className = 'raised button-mini emby-button';
+                                scanShowBtn.style.marginLeft = '8px';
+                                scanShowBtn.textContent = 'Scan show';
+                                scanShowBtn.title = 'Re-run the intro scan for just this show (all its seasons)';
+                                scanShowBtn.addEventListener('click', function () {
+                                    scanShowBtn.disabled = true;
+                                    ApiClient.ajax({
+                                        type: 'POST',
+                                        url: ApiClient.getUrl('EpisodeTools/IntrosStart'),
+                                        dataType: 'text',
+                                        data: JSON.stringify({ show: r.show }),
+                                        contentType: 'application/json'
+                                    }).then(function () {
+                                        scanShowBtn.disabled = false;
+                                        if (!introsTimer) { introsTimer = setInterval(pollIntros, 2000); }
+                                        pollIntros();
+                                    }).catch(function () {
+                                        scanShowBtn.disabled = false;
+                                        Dashboard.alert('Episode Tools: starting the per-show scan failed. Is a scan already running?');
+                                    });
+                                });
+                                tdShow.appendChild(scanShowBtn);
+                            }
                             tr.appendChild(tdShow);
                             var tdSeason = document.createElement('td');
                             tdSeason.textContent = r.season;
@@ -1900,6 +1942,20 @@
                             tdOutro.style.textAlign = 'center';
                             tr.appendChild(tdOutro);
 
+                            var tdSource = document.createElement('td');
+                            tdSource.style.textAlign = 'center';
+                            var badge = document.createElement('span');
+                            badge.textContent = source;
+                            badge.style.cssText = 'display:inline-block;padding:1px 8px;border-radius:9px;font-size:85%;' + (sourceStyles[source] || '');
+                            tdSource.appendChild(badge);
+                            if (r.detail) {
+                                var detailLine = document.createElement('div');
+                                detailLine.textContent = r.detail;
+                                detailLine.style.cssText = 'font-size:80%;opacity:.75;';
+                                tdSource.appendChild(detailLine);
+                            }
+                            tr.appendChild(tdSource);
+
                             var tdOv = document.createElement('td');
                             var ovBtn = document.createElement('button');
                             ovBtn.setAttribute('is', 'emby-button');
@@ -1914,11 +1970,11 @@
                             body.appendChild(tr);
                         });
                         if (intros.length === 0) {
-                            body.innerHTML = '<tr><td colspan="7">No intros recorded yet — run a scan.</td></tr>';
+                            body.innerHTML = '<tr><td colspan="8">No intros recorded yet — run a scan.</td></tr>';
                         }
                     }).catch(function () {
                         document.querySelector('#IntrosBody').innerHTML =
-                            '<tr><td colspan="7">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
+                            '<tr><td colspan="8">Could not load the intro results. Is plugin v2.5.0+ installed?</td></tr>';
                     });
             }
 
@@ -1954,12 +2010,12 @@
             /* ---------- inline intro override editor (F6) ---------- */
             function startOverrideEdit(r, tr) {
                 var tds = tr.querySelectorAll('td');
-                if (tds.length < 7 || tr.dataset.editing === '1') { return; }
+                if (tds.length < 8 || tr.dataset.editing === '1') { return; }
                 tr.dataset.editing = '1';
 
                 var tdIntro = tds[3];
                 var tdLen = tds[4];
-                var tdAct = tds[6];
+                var tdAct = tds[7];
                 tdIntro.innerHTML = '';
                 tdLen.innerHTML = '';
                 tdAct.innerHTML = '';
@@ -2008,6 +2064,15 @@
                 tdAct.appendChild(document.createTextNode(' '));
                 tdAct.appendChild(cancelBtn);
 
+                var wrap = document.createElement('label');
+                wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;font-size:85%;margin-right:8px;white-space:nowrap;';
+                wrap.title = 'Apply these exact times to every episode of this show and season (the rule is saved without an episode name)';
+                var chkSeason = document.createElement('input');
+                chkSeason.type = 'checkbox';
+                wrap.appendChild(chkSeason);
+                wrap.appendChild(document.createTextNode('whole season'));
+                tdAct.appendChild(wrap);
+
                 cancelBtn.addEventListener('click', function () { pollIntros(); });
 
                 saveBtn.addEventListener('click', function () {
@@ -2026,15 +2091,15 @@
                     saveBtn.disabled = true;
                     saveBtn.textContent = '…';
                     ApiClient.getPluginConfiguration(pluginUniqueId).then(function (config) {
-                        // The override episode match is a case-insensitive fragment of the
-                        // file path, so the base file name pins this rule to exactly this
-                        // episode (same convention as the Settings tab editor).
-                        var base = (r.file || '').split('/').pop().split('\\').pop();
+                        // Per-episode rules pin themselves with the base file name; season-wide
+                        // rules carry no episode name and replace every other rule for that
+                        // show+season (a leftover per-episode rule would win as "first match").
+                        var base = chkSeason.checked ? '' : (r.file || '').split('/').pop().split('\\').pop();
                         var kept = (config.IntroOverrides || []).filter(function (ov) {
                             return !(ov
                                 && (ov.Show || '').toLowerCase() === (r.show || '').toLowerCase()
                                 && (ov.Season || '') === (r.season || '')
-                                && (ov.Episode || '').toLowerCase() === base.toLowerCase());
+                                && (chkSeason.checked || (ov.Episode || '').toLowerCase() === base.toLowerCase()));
                         });
                         kept.push({
                             Show: r.show || '',

@@ -486,17 +486,68 @@ public class EpisodeToolsReportController : ControllerBase
 
     /// <summary>
     /// Starts the fast intro scan. Safe to call twice; the second call is a no-op while a
-    /// scan is running.
+    /// scan is running. Optional body {show} restricts the scan to one show (folder leaf
+    /// name), used by the Intros tab's per-show rescan button.
     /// </summary>
     [HttpPost("IntrosStart")]
-    public IActionResult StartIntros()
+    public IActionResult StartIntros([FromBody] IntrosStartBody? body)
     {
-        if (!IntrosRunner.TryStart(_logger))
+        var show = (body?.Show ?? string.Empty).Trim();
+        if (show.Length > 0 && !IsKnownShowName(show, out var error))
+        {
+            return BadRequest(error);
+        }
+
+        if (!IntrosRunner.TryStart(_logger, show.Length > 0 ? show : null))
         {
             return ContentText("already running");
         }
 
-        return ContentText("started");
+        return ContentText(show.Length > 0 ? $"started (show: {show})" : "started");
+    }
+
+    /// <summary>
+    /// Validates that a show name exists as a folder leaf under at least one configured
+    /// series/scan folder (mirrors how EnumerateJobs derives Show from the folder name),
+    /// so a typo cannot silently start a scan that does nothing.
+    /// </summary>
+    private bool IsKnownShowName(string show, out string error)
+    {
+        error = string.Empty;
+        var cfg = Plugin.Instance?.Configuration;
+        if (cfg is null)
+        {
+            error = "Plugin not initialized.";
+            return false;
+        }
+
+        var allowed = new List<string>(cfg.EffectiveRenameFolders);
+        allowed.AddRange(cfg.EffectiveConvertFolders);
+        foreach (var root in allowed)
+        {
+            if (root.Length == 0 || !Directory.Exists(root))
+            {
+                continue;
+            }
+
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(root))
+                {
+                    if (string.Equals(Path.GetFileName(dir), show, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Unreadable root: the runner will simply find no episodes either.
+            }
+        }
+
+        error = "Show not found under the configured series/scan folders.";
+        return false;
     }
 
     /// <summary>
@@ -1051,7 +1102,9 @@ public class EpisodeToolsReportController : ControllerBase
                 start = r.Start,
                 end = r.End,
                 outroStart = r.OutroStart,
-                outroEnd = r.OutroEnd
+                outroEnd = r.OutroEnd,
+                source = r.Source ?? "fingerprint",
+                detail = r.Detail
             })
         };
 
@@ -1246,6 +1299,14 @@ public class EpisodeToolsReportController : ControllerBase
         /// <summary>Gets or sets the absolute show folder to convert.</summary>
         [JsonPropertyName("folder")]
         public string? Folder { get; set; }
+    }
+
+    /// <summary>Optional request body for IntrosStart (per-show rescan).</summary>
+    public sealed class IntrosStartBody
+    {
+        /// <summary>Gets or sets the show (folder leaf name) to scan; empty scans everything.</summary>
+        [JsonPropertyName("show")]
+        public string? Show { get; set; }
     }
 
     /// <summary>Request body for FixDefaultTrack.</summary>
