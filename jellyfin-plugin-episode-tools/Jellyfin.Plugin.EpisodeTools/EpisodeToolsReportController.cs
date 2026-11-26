@@ -1136,7 +1136,7 @@ public class EpisodeToolsReportController : ControllerBase
         allowed.AddRange(cfg.EffectiveConvertFolders);
 
         // Read the group out of the audit report.
-        var baseDir = Plugin.Instance.WorkFolder;
+        var baseDir = Plugin.Instance?.WorkFolder ?? ".";
         var reportPath = Path.Combine(baseDir, "audit-report.txt");
         if (!System.IO.File.Exists(reportPath))
         {
