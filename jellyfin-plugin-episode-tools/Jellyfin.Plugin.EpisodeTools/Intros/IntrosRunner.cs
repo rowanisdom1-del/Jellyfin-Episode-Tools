@@ -96,6 +96,8 @@ internal static class IntrosRunner
 
             _lastMessage = "starting";
             _lastProgress = 0;
+            // The previous run is completed (checked above), so its source can go.
+            _cancellation?.Dispose();
             _cancellation = new CancellationTokenSource();
             var ct = _cancellation.Token;
             _running = Task.Run(
@@ -126,7 +128,14 @@ internal static class IntrosRunner
     {
         lock (Lock)
         {
-            _cancellation?.Cancel();
+            try
+            {
+                _cancellation?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Raced with the next TryStart disposing the finished run's source.
+            }
         }
     }
 
@@ -1841,6 +1850,7 @@ internal static class IntrosRunner
             var args = new[]
             {
                 "-hide_banner", "-loglevel", "info",
+                "-an", "-sn", "-dn",
                 "-ss", seek.ToString(CultureInfo.InvariantCulture),
                 "-i", path,
                 "-t", "8",

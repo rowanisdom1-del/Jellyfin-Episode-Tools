@@ -231,7 +231,7 @@ public sealed class EpisodeToolsSegmentProvider : IMediaSegmentProvider
                 return null;
             }
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "[Episode Tools] Serving {Count} segment(s) for {Path} from embedded chapters (no scan result yet).",
                 (winIntro is not null ? 1 : 0) + (winOutro is not null ? 1 : 0),
                 item.Path);

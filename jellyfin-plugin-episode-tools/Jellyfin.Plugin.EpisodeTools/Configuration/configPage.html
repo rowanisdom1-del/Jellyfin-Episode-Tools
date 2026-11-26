@@ -1986,8 +1986,9 @@
                         btn.disabled = false;
                         if (!introsTimer) { introsTimer = setInterval(pollIntros, 2000); }
                         pollIntros();
-                    }).catch(function () {
+                    }).catch(function (err) {
                         btn.disabled = false;
+                        Dashboard.alert('Episode Tools: starting the scan failed — already running, or check Dashboard > Logs.');
                     });
             });
 

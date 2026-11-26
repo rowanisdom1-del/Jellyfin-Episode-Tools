@@ -602,6 +602,8 @@ internal static class ScriptRunner
     /// one new MP4, so the new files appear immediately instead of waiting for the next
     /// scheduled scan. Best effort: a missing or busy task is logged and skipped.
     /// </summary>
+    private static readonly Regex ConvertedRegex = new(@"(\d+) converted", RegexOptions.Compiled);
+
     private static void TryQueueLibraryRefresh(ILogger logger, Queue<string> tail)
     {
         var taskManager = _taskManager;
@@ -614,7 +616,7 @@ internal static class ScriptRunner
         lock (tail)
         {
             converted = tail
-                .Select(line => Regex.Match(line, @"(\d+) converted"))
+                .Select(line => ConvertedRegex.Match(line))
                 .Where(m => m.Success)
                 .Select(m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))
                 .LastOrDefault();

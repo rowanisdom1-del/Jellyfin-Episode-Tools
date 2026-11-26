@@ -35,6 +35,8 @@ internal static class ShowConvertRunner
             _started = DateTime.UtcNow;
             _lastMessage = "starting";
             _result = string.Empty;
+            // The previous run is completed (checked above), so its source can go.
+            _cancellation?.Dispose();
             _cancellation = new CancellationTokenSource();
             var progress = new Progress<double>(p => _lastMessage = $"converting… {p:0}%");
             var loggerLocal = logger;
@@ -78,7 +80,14 @@ internal static class ShowConvertRunner
     {
         lock (Lock)
         {
-            _cancellation?.Cancel();
+            try
+            {
+                _cancellation?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Raced with the next TryStart disposing the finished run's source.
+            }
         }
     }
 
