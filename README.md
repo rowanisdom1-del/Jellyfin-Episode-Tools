@@ -19,8 +19,9 @@ with a Run button:
    already-converted episodes; replaces the old file only after verification
 7. **Audit library** — duplicate episodes (same show/season/episode in multiple files) and
    the largest video files
-8. **Scan intros (fast)** — fingerprints the first few minutes of every episode and finds
-   each season's shared opening; the result becomes skippable intro segments
+8. **Scan intros & outros (fast)** — fingerprints the first and last few minutes of every
+   episode, prefers frame-exact embedded chapters (OP/ED markers), votes season-wide on the
+   rest, and serves everything as skippable media segments
 
 ## Dashboard pages
 
@@ -33,8 +34,27 @@ a left sidebar of tabs, a settings search box, and a sticky Save bar.
 | **Shows** | Every show with episode counts, .mkv-to-convert count and subtitle languages found — plus **per-show default subtitle and audio language** dropdowns, applied at the next conversion |
 | **Report** | Every .mkv that could not be converted, and exactly why |
 | **Sub Check** | Subtitle problems per episode: default track is a signs/songs/lyrics track, lyrics-heavy content, ultra-short cues |
-| **Intros** | Skippable openings found by the fast intro scanner: Scan now / Stop, live progress and a per-season results table that fills in as the scan runs |
-| **Audit** | Duplicate episodes and the largest files, grouped and readable |
+| **Intros** | Skippable openings and outros found by the fast scanner: Scan now / Stop, per-show **Scan show** buttons, live progress, a per-season results table with **Source badges** (override / chapter / fingerprint / skipped with the reason), and per-episode **manual override editing** with a whole-season option |
+| **Audit** | Duplicate episodes and the largest files, grouped and readable — with **move to trash + restore** instead of plain delete |
+
+## What the intro/outro scanner does
+
+- **Chapter-first:** episodes with embedded OP/ED chapters get frame-exact boundaries from
+  the container — no fingerprinting, no snapping, and they work even in single-episode
+  seasons. Chapterless episodes fall back to fingerprint matching.
+- **Consensus voting:** pairwise matches are clustered and voted on season-wide, so recaps,
+  OVAs and specials cannot poison the whole season. Episodes with different cold-open
+  lengths keep their own coordinates, a chained recap/cold-open is recognized and the real
+  opening wins, and mid-season OP swaps (two-cour shows) are detected automatically.
+- **Bounded refinement:** intro ends and outro starts are snapped to silence only within
+  ±1.5s of the fingerprinted boundary; an ambiguous fade/cut gets a visual black-frame
+  refinement instead. Chapter boundaries are never adjusted.
+- **Provenance:** every row shows where its result came from — manual override, embedded
+  chapter, fingerprint (with the vote count), or skipped (with the reason).
+- **Per-show control:** rescan just one show, or set a manual override for one episode or a
+  whole season at once.
+- **Playback guard:** scans and conversions pause automatically while something is
+  playing, and resume when the library is idle.
 
 ## How conversions work
 
@@ -46,7 +66,10 @@ a left sidebar of tabs, a settings search box, and a sticky Save bar.
 - **Track selection:** per-show language preferences and signs/songs filtering are applied
   during the remux; the first matching audio/subtitle track is flagged as the player default.
   A language filter that matches nothing keeps everything — it never silently removes all
-  subtitles or all audio.
+  subtitles or all audio. **One-click fix** on the Sub Check page re-muxes an already-
+  converted file so the right track becomes default (the original is archived in the trash).
+  Chapter tracks are never carried into MP4s (they are what becomes the `bin_data` streams
+  that ExoPlayer refuses to play).
 - Files with unusual codecs are skipped with a reason (overridable per run with `--force`);
   DTS/TrueHD/FLAC audio can be re-encoded to AAC per setting.
 - Runs at `nice 19` + `ionice -c3` so Jellyfin stays responsive; a lock prevents two
@@ -65,15 +88,15 @@ Any push builds the plugin automatically (`.github/workflows/build.yml`) and kee
 as an artifact. To publish a release, push a tag:
 
 ```bash
-git tag v3.1.0 && git push origin v3.1.0
+git tag v3.2.0 && git push origin v3.2.0
 ```
 
-The workflow attaches `EpisodeTools_3.1.0.0.zip` to the release. Download from the
+The workflow attaches `EpisodeTools_3.2.0.0.zip` to the release. Download from the
 [Releases page](../../releases).
 
 ## Install
 
-**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.1.0.0/`
+**Docker:** copy the zip's contents into `<config folder>/plugins/EpisodeTools_3.2.0.0/`
 (the DLL must sit directly in that folder) and restart the container. The container needs
 `python3` for the rename/audit tasks — the official Jellyfin image has ffmpeg bundled.
 
@@ -81,10 +104,10 @@ The workflow attaches `EpisodeTools_3.1.0.0.zip` to the release. Download from t
 
 ```bash
 sudo apt install unzip acl
-wget https://github.com/<your-user>/<your-repo>/releases/download/v3.1.0/EpisodeTools_3.1.0.0.zip
-sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.1.0.0
-sudo unzip -o EpisodeTools_3.1.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.1.0.0
-sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.1.0.0
+wget https://github.com/<your-user>/<your-repo>/releases/download/v3.2.0/EpisodeTools_3.2.0.0.zip
+sudo mkdir -p /var/lib/jellyfin/plugins/EpisodeTools_3.2.0.0
+sudo unzip -o EpisodeTools_3.2.0.0.zip -d /var/lib/jellyfin/plugins/EpisodeTools_3.2.0.0
+sudo chown -R jellyfin:jellyfin /var/lib/jellyfin/plugins/EpisodeTools_3.2.0.0
 sudo setfacl -R -m u:jellyfin:rwX /mnt/storage/media
 sudo setfacl -R -d -m u:jellyfin:rwX /mnt/storage/media
 sudo systemctl restart jellyfin
@@ -101,11 +124,12 @@ sudo systemctl restart jellyfin
   that exist are reported.
 - Updating: replace the plugin folder's contents with the new zip's and restart Jellyfin.
 
-## Fast intro scanner
+## Fast intro & outro scanner
 
-The **8. Scan intros (fast)** task finds each season's shared opening sequence and serves it
-as standard Jellyfin media segments, so every client gets an intro skip button (segments are
-copied into the server's database by the built-in **Extract media segments** task).
+The **8. Scan intros & outros (fast)** task finds each season's shared opening and closing
+sequences and serves them as standard Jellyfin media segments, so every client gets an
+intro/outro skip button (segments are copied into the server's database by the built-in
+**Extract media segments** task).
 
 Why it is faster than the official Intro Skipper:
 
@@ -113,6 +137,10 @@ Why it is faster than the official Intro Skipper:
   window is 4 minutes from the start (configurable 1–15 min). The official Intro Skipper
   defaults to the first 25% of the file up to 10 minutes, so for typical 20–50 minute
   episodes this means roughly half to a third of the audio to fingerprint by default.
+- **Chapter fast path** — episodes with embedded OP/ED chapters skip fingerprinting
+  entirely; their boundaries come straight from the container.
+- **Cached metadata** — duration and chapters are probed once per file and cached; the
+  outro pass reuses them instead of a second ffprobe.
 - **Parallel decoding** — several episodes are fingerprinted at the same time (default 2,
   up to 8 ffmpeg processes).
 - **Per-file cache** — fingerprints are stored keyed on size + mtime + window, so re-scans
@@ -120,17 +148,43 @@ Why it is faster than the official Intro Skipper:
   resumes where it left off. Entries for deleted episodes are pruned automatically.
 - **Incremental results** — seasons are compared one at a time and results are saved after
   each season, so intros appear in the Intros tab while the scan is still running.
-- The matching itself is the proven chromaprint algorithm (inverted-index search + contiguous
-  range finding, like the official plugin), ending with the same silence-snap of the intro's
-  end timestamp.
+- **Outro detection (optional)** — the last few minutes of each episode (configurable
+  1–15 min) are fingerprinted with a separate cache; matches snap to the credits start.
+  Chapter-derived outros are frame-exact and skip pairing entirely.
 
-Settings (Settings tab): fingerprint window in minutes, parallelism, shortest/longest intro.
-The scanner finds **intros only** (the shared opening at the start of each episode); it does
-not detect credits, commercials, previews or recaps — if you need those, use the official
-Intro Skipper, which covers every media segment type. If you run both plugins, disable one
-of the two intro scanners to avoid duplicate skip buttons.
+The matching itself is the proven chromaprint algorithm (inverted-index search + contiguous
+range finding, like the official plugin), followed by season-wide consensus voting and a
+bounded silence snap. Outro detection can be turned off in the settings.
+
+Settings (Settings tab): fingerprint window in minutes, parallelism, shortest/longest
+segment, detect outros, outro window.
 
 ## Version history
+
+- **3.2.0** — the scanner overhaul + admin UX round:
+  - **Chapter-first detection:** embedded OP/ED chapters give frame-exact boundaries
+    (priority: manual override → embedded chapter → fingerprint); chaptered episodes skip
+    fingerprinting and snapping, work in single-episode seasons, and the media segment
+    provider can also serve Jellyfin's stored chapters directly.
+  - **Outro/credits detection:** optional second pass fingerprinting the last minutes of
+    each episode, with its own cache and silence/black-frame snapping at the credits start.
+  - **Consensus voting:** season-wide cluster voting replaces longest-match — recaps,
+    OVAs and specials can no longer poison a season, episodes with different cold-open
+    lengths keep their own coordinates, chained pre-rolls (recap → OP) are demoted, and
+    mid-season OP/ED swaps are detected automatically.
+  - **Bounded refinement:** silence snapping only moves a boundary ±1.5s; ambiguous
+    fades/cuts get a black-frame visual refinement instead.
+  - **Provenance:** the Intros table shows each result's source (override / chapter /
+    fingerprint / skipped + reason) and per-show, per-season results with Scan show
+    buttons and whole-season override editing.
+  - **Trash archive:** Audit's duplicate resolution moves files to a manifest-backed
+    trash with a Restore button (and Empty), instead of deleting outright.
+  - **One-click Default Track Fix:** the Sub Check page can re-mux an already-converted
+    file so the correct subtitle track becomes default, with the original archived.
+  - **Playback guard:** scans, snapping and conversions wait while something is playing.
+  - Hardening: conversions no longer write `bin_data` chapter tracks into new MP4s,
+    trash restores are confined to the configured library folders, and tool pipes,
+    cancellation sources and process probes are leak-free.
 
 - **3.1.0** — subtitle cleaning + remux-existing:
   - Converted subtitle tracks are now cleaned before they become mov_text: style/karaoke

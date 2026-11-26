@@ -1,1 +1,7 @@
 __pycache__/
+__pycache__/
+*.pyc
+bin/
+obj/
+out/
+*.zip
