@@ -1092,13 +1092,20 @@
                             });
                         });
                         if (badRows.length > 0) {
+                            Dashboard.hideLoadingMsg();
                             Dashboard.alert('Episode Tools: intro overrides were not saved. Fix the highlighted red rows (' + badRows.join(', ') + ') and save again.');
                             return;
                         }
                         config.IntroOverrides = overrides;
                         ApiClient.updatePluginConfiguration(pluginUniqueId, config).then(function (result) {
                             Dashboard.processPluginConfigurationUpdateResult(result);
+                        }).catch(function () {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('Episode Tools: saving the settings failed. Check the server connection and try again.');
                         });
+                    }).catch(function () {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert('Episode Tools: saving the settings failed. Check the server connection and try again.');
                     });
                     e.preventDefault();
                     return false;
@@ -1606,6 +1613,7 @@
 
             /* ---------- intros tab ---------- */
             var introsTimer = null;
+            var lastIntros = [];
 
             function fmtClock(seconds) {
                 var s = Math.max(0, Math.round(seconds));
@@ -1632,9 +1640,21 @@
 
                         var body = document.querySelector('#IntrosBody');
                         body.innerHTML = '';
-                        var intros = st.intros || [];
-                        document.querySelector('#IntrosInfo').textContent =
-                            intros.length + ' intro(s) found' + (st.scannedAt ? ' — latest scan: ' + String(st.scannedAt).replace('T', ' ').replace('Z', ' UTC') : '');
+                        var intros = st.intros;
+                        if (intros === undefined || intros === null) {
+                            // The server withholds the full list while a scan is running;
+                            // keep showing the previous results instead of flashing empty.
+                            intros = lastIntros;
+                        } else {
+                            lastIntros = intros;
+                        }
+                        var infoText = intros.length + ' intro(s) found';
+                        if (scan.running) {
+                            infoText += ' — scanning; the full list loads when the scan finishes';
+                        } else if (st.scannedAt) {
+                            infoText += ' — latest scan: ' + String(st.scannedAt).replace('T', ' ').replace('Z', ' UTC');
+                        }
+                        document.querySelector('#IntrosInfo').textContent = infoText;
                         intros.forEach(function (r) {
                             var tr = document.createElement('tr');
                             var tdShow = document.createElement('td');

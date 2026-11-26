@@ -1178,7 +1178,8 @@ internal static class IntrosRunner
         {
             return
                 (Start < tr.Start && tr.Start < End) ||
-                (Start < tr.End && tr.End < End);
+                (Start < tr.End && tr.End < End) ||
+                (tr.Start <= Start && End <= tr.End);
         }
     }
 
